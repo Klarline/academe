@@ -1,313 +1,269 @@
-# 🎓 Academe
-
-> Multi-Agent AI Assistant that adapts machine learning explanations to your level
+# 🎓 Academe - Academic AI Assistant
 
 Built with LangGraph • Powered by Google Gemini
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2.45-green.svg)](https://github.com/langchain-ai/langgraph)
 
----
+**Multi-Agent Learning System with Adaptive Explanations**
 
-## 🌟 What Makes Academe Special?
-
-**The Problem:** Academic papers and textbooks are often too complex for students to understand. Even when using ChatGPT, explanations can still be overly technical or frustratingly vague.
-
-**The Insight:** The internet discovered that prompting LLMs with "explain this like I'm a 70-year-old granny" produces surprisingly better explanations. This reveals a gap: **LLMs CAN simplify complex concepts, but they need the right framing.**
-
-**Academe's Solution:** A multi-agent system that automatically provides **adaptive, multi-level explanations**:
-
-- 🎈 **Intuitive Level**: Simple analogies, everyday language, zero jargon
-- 🔬 **Technical Level**: Full mathematical rigor, formulas, graduate-level detail
-
-Both explanations are accurate—just presented differently. It's like having a patient tutor who can explain the same concept multiple ways until it clicks.
+A production-grade AI assistant that helps students understand complex academic concepts through personalized, memory-adaptive responses. Built with LangGraph, featuring 5 specialized agents, RAG-powered document understanding, and intelligent memory that learns from your progress.
 
 ---
 
-## 🏗️ Architecture
-```
-User Query
-    ↓
-Router Agent (keyword-based classification)
-    ↓
-    ├─→ Concept Explainer Agent → Multi-level explanations
-    │   (Intuitive + Technical)
-    │
-    └─→ Code Helper Agent → Educational Python code
-        (Implementation + Examples + Explanations)
-```
+## 🌟 Key Features
 
-### The Three Specialized Agents
+### 5 Specialized AI Agents
+- **Concept Explainer** - Adaptive explanations that adjust to your level and learning history
+- **Code Helper** - Generates code with extra comments for concepts you struggle with
+- **Research Agent** - Searches your documents with semantic search and provides citations
+- **Practice Generator** - Auto-focuses practice questions on your weak areas
+- **Router** - Intelligently routes queries to the most appropriate agent
 
-1. **Router Agent** 🧭
-   - Analyzes queries to determine intent
-   - Routes to appropriate specialist agent
-   - Uses keyword matching (v0.1) with LLM fallback option
+### Intelligent Memory System
+- **Tracks your learning** - Monitors which concepts you've studied and mastered
+- **Detects weak areas** - Identifies topics where you struggle (< 60% accuracy)
+- **Adapts responses** - Agents automatically adjust explanations based on your history
+- **LLM-powered filtering** - Uses AI to identify which past concepts are relevant
 
-2. **Concept Explainer Agent** 💡 ⭐
-   - **This is Academe's key innovation!**
-   - Explains concepts at two levels simultaneously:
-     - Intuitive: "Granny mode" - pure intuition, no math
-     - Technical: Full rigor with mathematical notation
-   - Inspired by the viral "granny mode" prompting technique
-
-3. **Code Helper Agent** 💻
-   - Generates clean, educational Python implementations
-   - Includes detailed comments and docstrings
-   - Provides usage examples and step-by-step explanations
-   - Focuses on NumPy for mathematical operations
-
----
-
-## ✨ Features
-
-- 🎯 **Intelligent Routing**: Automatically determines whether you want explanations or code
-- 📊 **Multi-Level Explanations**: Same concept explained intuitively AND technically
-- 💻 **Educational Code**: Production-quality implementations with teaching focus
-- 🔄 **LangGraph Orchestration**: Professional multi-agent coordination
-- 🧪 **Fully Tested**: Comprehensive test suite with pytest
-- 🎨 **Clean CLI**: Beautiful command-line interface
+### Production-Grade Architecture
+- **Async processing** - Celery + Redis for non-blocking operations (20% faster)
+- **Real semantic search** - sentence-transformers for accurate document retrieval
+- **RAG pipeline** - Upload PDFs and get context-aware answers with citations
+- **Progress tracking** - Dashboard showing mastery levels and study analytics
 
 ---
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-
-- Python 3.11 or higher
-- Conda (recommended) or venv
-- Google Gemini API key ([Get one free](https://aistudio.google.com/apikey))
+- Python 3.11+
+- Docker (for MongoDB and Redis)
+- ~2GB disk space
 
 ### Installation
+
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/academe.git
+# 1. Clone repository
+git clone https://github.com/Klarline/academe.git
 cd academe
 
-# Create conda environment
+# 2. Create conda environment
 conda create -n academe python=3.11
 conda activate academe
 
-# Install dependencies
+# 3. Install dependencies
 pip install -r requirements.txt
 
-# Install in editable mode
-pip install -e .
-
-# Set up environment variables
+# 4. Copy environment template
 cp .env.example .env
-# Add your GOOGLE_API_KEY to .env
-```
+# Edit .env and add your GOOGLE_API_KEY
 
-### Configuration
+# 5. Start services
+docker-compose up -d  # MongoDB
+docker run -d -p 6379:6379 redis  # Redis for Celery
 
-Edit `.env`:
-```bash
-# LLM Configuration
-LLM_PROVIDER=gemini
+# 6. Start Celery worker (new terminal)
+./scripts/start_worker.sh
 
-# API Keys
-GOOGLE_API_KEY=your_key_here
-
-# App Settings
-LOG_LEVEL=INFO
-```
-
-### Usage
-
-**Interactive Mode:**
-```bash
+# 7. Run the app
 python main.py
-```
-
-**Demo Mode:**
-```bash
-python main.py demo
-```
-
-**Get Help:**
-```bash
-python main.py help
 ```
 
 ---
 
-## 💡 Usage Examples
+## 📖 Usage Examples
 
-### Example 1: Concept Explanation
-
-**Input:**
+### Basic Chat
 ```
-🤔 Your question: What is gradient descent?
-```
-
-**Output:**
-```
-## Intuitive Explanation 🎈
-
-Imagine you're blindfolded on a hilly landscape, trying to find 
-the lowest valley. You feel around with your feet—if you detect 
-a downward slope, you take a small step in that direction...
-
-## Technical Explanation 🔬
-
-Gradient Descent is an iterative first-order optimization algorithm 
-used to minimize a differentiable objective function J(w).
-
-The update rule: w_{t+1} = w_t - α∇J(w_t)
-
-Where α is the learning rate and ∇J(w_t) is the gradient...
-
-## Key Takeaway 💡
-
-Gradient descent finds function minima by iteratively moving in 
-the direction of steepest descent.
+You: What is gradient descent?
+AI: [Adapts explanation based on your level and learning history]
 ```
 
-### Example 2: Code Generation
-
-**Input:**
+### Document Q&A
 ```
-🤔 Your question: Implement gradient descent in NumPy
-```
-
-**Output:**
-Overview 📋
-Implementation of gradient descent optimization in NumPy for
-linear regression...
-Implementation 💻
-pythonimport numpy as np
-
-def gradient_descent(X, y, learning_rate=0.01, num_iterations=1000):
-    """
-    Performs gradient descent to optimize linear regression parameters.
-    
-    Args:
-        X: Input features
-        y: Target values
-        learning_rate: Step size for updates
-        num_iterations: Number of optimization steps
-    """
-    # [Complete working code with detailed comments]
+Upload: Murphy's PML Chapter 7
+You: What does the author say about eigenvalues?
+AI: [Searches your PDF, provides answer with page citations]
 ```
 
-## Usage Example 🚀
-[Working example with sample data]
-
-## How It Works 🔍
-[Step-by-step explanation]
+### Adaptive Practice
 ```
+You: Generate practice questions on linear algebra
+AI: [Auto-focuses on eigenvalues if that's your weak area]
+   - Generates 5 questions
+   - MCQ with proper options A-D
+   - Focuses on concepts you're struggling with
+```
+
+### Memory-Aware Responses
+```
+[You previously struggled with eigenvalues - 35% accuracy]
+
+You: Explain gradient descent
+AI: "Remember how we discussed eigenvalues showing main directions? 
+     Gradient descent is similar, but simpler. Since eigenvalues is 
+     still challenging, I'll explain without assuming that knowledge..."
+```
+
+---
+
+## 🏗️ Architecture
+
+### Multi-Agent System
+```
+User Query
+    ↓
+Router (LLM-based)
+    ↓
+┌─────────┬─────────┬──────────┬──────────┐
+│ Concept │  Code   │ Research │ Practice │
+│Explainer│ Helper  │  Agent   │Generator │
+└─────────┴─────────┴──────────┴──────────┘
+    ↓
+Memory Update (Celery - background)
+    ↓
+MongoDB (Progress tracking)
+```
+
+### Tech Stack
+- **Orchestration:** LangGraph 0.2.45
+- **LLM:** Google Gemini 2.5 Flash
+- **Vector DB:** Pinecone
+- **Embeddings:** sentence-transformers (all-MiniLM-L6-v2, 384d)
+- **Database:** MongoDB 7.0
+- **Task Queue:** Celery 5.3.4 + Redis 5.0.1
+- **CLI:** Rich 13.7.0
+- **Validation:** Pydantic 2.10.4
+
+---
+
+## 📊 Project Status
+
+### Current Capabilities
+- 5 specialized AI agents (3 memory-adaptive)
+- Real semantic search with embeddings
+- Intelligent memory system with LLM filtering
+- Production-grade async processing (Celery + Redis)
+- Progress tracking and weak area detection
+- ~17,500 lines of production Python code
 
 ---
 
 ## 🧪 Testing
+
 ```bash
-# Run all tests
-python -m pytest tests/ -v
+# Test memory integration
+python tests/test_memory_integration.py
 
-# Run fast tests only (skip LLM calls)
-python -m pytest tests/ -v -m "not slow"
+# Test real embeddings
+python tests/test_real_embeddings.py
 
-# Run with coverage
-python -m pytest tests/ --cov=academe --cov-report=term-missing
-
-# Run specific test file
-python -m pytest tests/test_router.py -v
+# Run full test suite
+pytest tests/
 ```
 
 ---
 
-## 📂 Project Structure
+## 📁 Project Structure
+
 ```
 academe/
-├── academe/                    # Main package
-│   ├── __init__.py
-│   ├── config/                # Configuration management
-│   │   ├── __init__.py
-│   │   ├── settings.py        # Environment settings
-│   │   └── llm_config.py      # LLM factory (supports multiple providers)
-│   ├── agents/                # Specialized agents
-│   │   ├── __init__.py
-│   │   ├── router.py          # Routes queries to agents
-│   │   ├── concept_explainer.py  # Multi-level explanations
-│   │   └── code_helper.py     # Code generation
-│   └── graph/                 # LangGraph workflow
-│       ├── __init__.py
-│       ├── state.py           # State definition
-│       ├── nodes.py           # Node functions
-│       └── workflow.py        # Workflow graph
-├── tests/                     # Test suite
-│   ├── test_router.py
-│   ├── test_concept_explainer.py
-│   ├── test_code_helper.py
-│   └── test_workflow.py
-├── main.py                    # CLI application
-├── demo.py                    # Interactive demo
-├── requirements.txt           # Dependencies
-├── setup.py                   # Package setup
-├── pytest.ini                 # Test configuration
-├── .env                       # Environment variables (gitignored)
-├── .gitignore
-└── README.md
+├── academe/              # Main source code
+│   ├── agents/          # 5 AI agents
+│   ├── auth/            # JWT authentication
+│   ├── cli/             # Rich terminal interface
+│   ├── config/          # Settings and LLM setup
+│   ├── database/        # MongoDB repositories
+│   ├── documents/       # PDF processing
+│   ├── evaluation/      # RAGAS framework
+│   ├── graph/           # LangGraph workflow
+│   ├── memory/          # Context management
+│   ├── models/          # Pydantic models
+│   ├── onboarding/      # User onboarding flow
+│   ├── rag/             # RAG pipeline
+│   ├── vectors/         # Embeddings & search
+│   ├── utils/           # Utility modules
+│   ├── celery_config.py # Celery setup
+│   ├── tasks.py         # Background tasks
+├── scripts/            # Helper scripts
+│   └── start_worker.sh # Start Celery worker
+├── tests/              # Test suite
+├── main.py             # Entry point
+├── requirements.txt    # Dependencies
+├── docker-compose.yml  # MongoDB setup
+└── .env.example        # Configuration template
 ```
 
 ---
 
-## 🛠️ Technology Stack
+## 🎯 Use Cases
 
-**Core Framework:**
-- [LangGraph 0.2.45](https://github.com/langchain-ai/langgraph) - Multi-agent orchestration
-- [LangChain 0.3.7](https://github.com/langchain-ai/langchain) - LLM integration
+### For CS/ML Students
+- Understand complex papers and textbooks
+- Get explanations adapted to your level
+- Generate practice problems
+- Track learning progress
 
-**LLM Provider:**
-- [Google Gemini 2.5 Flash](https://ai.google.dev/) - Fast, free-tier model
-
-**Development:**
-- Python 3.11+
-- [pytest](https://pytest.org/) - Testing framework
-- [Pydantic](https://docs.pydantic.dev/) - Settings validation
+### For Developers
+- Learn LangGraph and multi-agent systems
+- Study production RAG implementation
+- Understand async task processing with Celery
+- See Pydantic structured outputs in action
 
 ---
 
-## 🎓 What I Learned Building This
+## 🔧 Development
 
-### Technical Skills
+### Running Locally
 
-- **Multi-Agent Architectures**: Designed and implemented a production-ready multi-agent system with specialized agents and intelligent routing
-- **LangGraph Workflows**: Mastered state management, conditional edges, and node orchestration
-- **Prompt Engineering**: Developed sophisticated prompts for multi-level adaptive explanations
-- **Software Design**: Applied factory pattern for LLM abstraction, making the system provider-agnostic
+**Terminal 1 - Services:**
+```bash
+docker-compose up -d  # MongoDB
+docker run -d -p 6379:6379 redis  # Redis
+```
 
-### Key Design Decisions
+**Terminal 2 - Celery Worker:**
+```bash
+./scripts/start_worker.sh
+```
 
-1. **Why Multi-Agent vs Single LLM?**
-   - Specialized agents are better at their specific tasks
-   - Easier to optimize and debug individual components
-   - More modular and maintainable architecture
+**Terminal 3 - Application:**
+```bash
+python main.py
+```
 
-2. **Why Keyword Routing (v0.1)?**
-   - Fast and free (no additional LLM call)
-   - Accurate enough for common cases
-   - Can upgrade to LLM-based routing in v1.0 for better accuracy
+### Adding New Agents
+1. Create agent in `academe/agents/your_agent.py`
+2. Add node function in `academe/graph/nodes.py`
+3. Update router in `academe/agents/router.py`
+4. Add to workflow in `academe/graph/workflow.py`
 
-3. **Why Multi-Level Explanations?**
-   - Real problem: Academic content is often inaccessibly complex
-   - Inspired by "granny mode" viral technique
-   - Both levels maintain accuracy while serving different audiences
+---
 
-### Challenges Overcome
+## 🔮 Future Enhancements
 
-- **LLM Provider Selection**: Initially tried multiple Gemini models before finding the right one (gemini-2.5-flash)
-- **Import Path Issues**: Learned about Python package structure and editable installs
-- **State Design**: Balanced simplicity (TypedDict) with functionality
+- FastAPI REST API backend
+- Next.js/React frontend
+- WebSocket streaming responses
+- Multi-modal support (LaTeX, diagrams)
+- Fine-tuned models for academic language
+- Collaborative learning features
+- Cloud deployment (AWS/GCP)
+
+---
+
+## 🤝 Contributing
+
+This is a personal portfolio project, but feedback and suggestions are welcome!
 
 ---
 
 ## 🙏 Acknowledgments
 
-- **LangChain Team** for the excellent LangGraph framework
-- **Google** for providing free-tier Gemini API access
-- **Northeastern University** for the CS6140 Machine Learning course that inspired this project
+- LangChain Team for the excellent LangGraph framework
+- Google for providing free-tier Gemini API access
+- Machine Learning course that inspired this project
 - The viral "granny mode" technique that sparked the multi-level explanation idea
 
 ---

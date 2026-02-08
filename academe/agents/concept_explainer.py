@@ -1,214 +1,339 @@
 """
-Concept Explainer Agent - Explains concepts at multiple levels.
+Concept Explainer Agent - Personalized explanations with RAG support.
 
 This is the CORE INNOVATION of Academe - inspired by the viral "granny mode"
-prompting technique. The agent provides TWO levels of explanation:
+prompting technique, now enhanced with user personalization AND document context.
 
-1. INTUITIVE (Granny Mode): Simple analogies, no jargon, pure intuition
-2. TECHNICAL: Full mathematical rigor with formulas and terminology
-
-This adaptive approach helps learners at any level understand complex concepts.
+Now searches user's documents for relevant context before explaining.
 """
 
-from typing import Literal
+from typing import Optional, Dict, Any
 from academe.config import get_llm
-from langchain.prompts import ChatPromptTemplate
+from academe.models import UserProfile, LearningLevel, ExplanationStyle, LearningGoal
+from academe.models.agent_responses import ConceptExplanationResponse
 
 
-# Explanation level instructions
-EXPLANATION_LEVELS = {
-    "intuitive": """
-Explain using simple, everyday language that a 70-year-old with no technical 
-background could understand. Use relatable analogies and real-world examples.
-NO jargon, NO math notation, NO technical terms. Focus purely on intuition.
-Make it feel like explaining to a curious grandparent over tea.
-""",
-    
-    "technical": """
-Provide a rigorous, graduate-level explanation with proper mathematical notation.
-Include formulas, algorithms, and precise technical terminology.
-Assume the reader has a strong mathematics and computer science background.
-Be thorough and academically complete.
-"""
-}
-
-
-def create_concept_explainer():
+def get_personalized_instructions(user: Optional[UserProfile] = None) -> str:
     """
-    Creates the Concept Explainer agent with multi-level prompting.
-    
-    This agent is the heart of Academe's innovation. It generates explanations
-    at two different levels, allowing learners to choose their preferred depth.
-    
-    Returns:
-        LangChain chain configured for multi-level explanations
-    """
-    
-    llm = get_llm(temperature=0.7)
-    
-    # Multi-level explanation prompt template
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are an expert educator with a gift for adaptive teaching.
-
-Your specialty is explaining complex machine learning concepts at multiple levels,
-making them accessible to learners with different backgrounds.
-
-You will provide TWO versions of your explanation:
-
-1. **INTUITIVE VERSION (Granny Mode)**:
-{intuitive_instruction}
-
-2. **TECHNICAL VERSION**:
-{technical_instruction}
-
-Format your response EXACTLY as follows:
-
-## Intuitive Explanation 🎈
-
-[Your intuitive explanation here - simple, relatable, no jargon]
-
-## Technical Explanation 🔬
-
-[Your technical explanation here - rigorous, mathematical, complete]
-
-## Key Takeaway 💡
-
-[One sentence that captures the core insight - the "aha!" moment]
-
-## Why This Matters 🎯
-
-[2-3 sentences explaining why this concept is important]
-
-Remember:
-- The intuitive version should make a complete beginner say "Oh, I get it!"
-- The technical version should satisfy a graduate student's need for rigor
-- Both versions should be accurate - just different in presentation
-- Use analogies freely in intuitive, formulas freely in technical
-"""),
-        ("human", "Explain this concept: {question}")
-    ])
-    
-    chain = prompt | llm
-    return chain
-
-
-def explain_concept(
-    question: str, 
-    level: Literal["both", "intuitive", "technical"] = "both"
-) -> str:
-    """
-    Explains an concept at the specified level(s).
-    
-    This is the main function that users and other agents will call.
+    Generate personalized system prompt based on user profile.
     
     Args:
-        question: The concept to explain (e.g., "What is gradient descent?")
-        level: Which explanation level(s) to provide:
-            - "both": Both intuitive and technical (default)
-            - "intuitive": Only the simple, granny-mode explanation
-            - "technical": Only the rigorous mathematical explanation
+        user: User profile with preferences
     
     Returns:
-        Formatted explanation at the requested level(s)
-    
-    Examples:
-        >>> explain_concept("What is PCA?", level="both")
-        # Returns both intuitive and technical explanations
+        Complete system prompt with user context
+    """
+    if not user:
+        return """You are an expert educator with a gift for adaptive teaching.
         
-        >>> explain_concept("Explain eigenvalues", level="intuitive")
-        # Returns only simple, intuitive explanation
-    """
+Provide clear explanations that are easy to understand."""
     
-    explainer = create_concept_explainer()
+    # Build system context
+    system_prompt = f"""You are an expert educator with a gift for adaptive teaching.
+
+USER PROFILE:
+- Learning Level: {user.learning_level.value} ({user.learning_level.get_description()})
+- Learning Goal: {user.learning_goal.value} ({user.learning_goal.get_description()})
+- Explanation Style: {user.explanation_style.value} ({user.explanation_style.get_description()})
+- Include Math: {'Yes' if user.include_math_formulas else 'No - avoid mathematical notation'}
+- Include Visuals: {'Yes - use ASCII diagrams when helpful' if user.include_visualizations else 'No'}
+
+INSTRUCTIONS FOR THIS USER:
+"""
     
-    # Get full response with both levels
-    response = explainer.invoke({
-        "question": question,
-        "intuitive_instruction": EXPLANATION_LEVELS["intuitive"],
-        "technical_instruction": EXPLANATION_LEVELS["technical"]
-    })
+    # Customize based on learning level
+    if user.learning_level == LearningLevel.BEGINNER:
+        system_prompt += """
+- Use very simple, everyday language
+- Use familiar analogies from daily life
+- Avoid technical jargon or define it clearly
+- Break down complex ideas into small steps
+- Provide concrete examples"""
+        
+    elif user.learning_level == LearningLevel.INTERMEDIATE:
+        system_prompt += """
+- Use clear language with some technical terms
+- Introduce concepts with context
+- Balance accessibility with depth
+- Include relevant examples
+- Connect to foundational knowledge"""
+        
+    else:  # ADVANCED
+        system_prompt += """
+- Use rigorous, graduate-level explanations
+- Include advanced mathematical formulations
+- Connect to cutting-edge research
+- Discuss nuances and edge cases
+- Reference papers or advanced resources"""
     
-    content = response.content
+    # Adjust for learning goal
+    if user.learning_goal == LearningGoal.QUICK_REVIEW:
+        system_prompt += "\n- Focus on key points only, be concise"
+    elif user.learning_goal == LearningGoal.EXAM_PREP:
+        system_prompt += "\n- Emphasize testable concepts and common questions"
+    elif user.learning_goal == LearningGoal.RESEARCH:
+        system_prompt += "\n- Include depth, nuances, and research context"
+    else:  # DEEP_LEARNING
+        system_prompt += "\n- Provide comprehensive coverage with multiple examples"
     
-    # If user wants both, return everything
-    if level == "both":
-        return content
+    # Explanation style
+    if user.explanation_style == ExplanationStyle.INTUITIVE:
+        system_prompt += "\n- Prioritize intuitive understanding over technical rigor"
+    elif user.explanation_style == ExplanationStyle.TECHNICAL:
+        system_prompt += "\n- Prioritize technical accuracy and mathematical precision"
+    else:  # BALANCED
+        system_prompt += "\n- Balance intuitive understanding with technical details"
     
-    # Extract only requested level
-    if level == "intuitive":
-        # Extract content between "## Intuitive" and "## Technical"
-        try:
-            start = content.find("## Intuitive Explanation")
-            end = content.find("## Technical Explanation")
-            if start != -1 and end != -1:
-                return content[start:end].strip()
-        except:
-            pass
-    
-    elif level == "technical":
-        # Extract content from "## Technical" onwards
-        try:
-            start = content.find("## Technical Explanation")
-            if start != -1:
-                return content[start:].strip()
-        except:
-            pass
-    
-    # Fallback: return full response if extraction fails
-    return content
+    return system_prompt
 
 
-def explain_concept_interactive(question: str) -> dict:
+def create_personalized_explainer(
+    user: Optional[UserProfile] = None,
+    use_rag: bool = True
+):
     """
-    Interactive version that returns structured data for UI display.
+    Creates a personalized Concept Explainer using structured output.
     
-    This version is useful when building a web interface where you want
-    to display each section separately.
+    Args:
+        user: User profile with preferences
+        use_rag: Whether to use RAG for document context
+    
+    Returns:
+        LLM configured for structured concept explanations
+    """
+    llm = get_llm(temperature=0.7)
+    system_prompt = get_personalized_instructions(user)
+    
+    # Determine which fields to populate based on style
+    if user and user.explanation_style == ExplanationStyle.INTUITIVE:
+        additional_instruction = "\nProvide only intuitive_explanation (leave technical_explanation as None)."
+    elif user and user.explanation_style == ExplanationStyle.TECHNICAL:
+        additional_instruction = "\nProvide only technical_explanation (leave intuitive_explanation as None)."
+    else:
+        additional_instruction = "\nProvide both intuitive_explanation AND technical_explanation."
+    
+    # Add RAG instruction if enabled
+    rag_instruction = ""
+    if use_rag:
+        rag_instruction = """
+
+DOCUMENT CONTEXT:
+{document_context}
+
+IMPORTANT: If document context is provided above, use it to enhance your explanation:
+- Reference specific examples from the user's materials
+- Use terminology consistent with their documents
+- Cite page numbers or sections when relevant
+- If context conflicts with general knowledge, prioritize the user's materials
+"""
+    
+    full_prompt = system_prompt + additional_instruction + rag_instruction + """
+
+FORMAT YOUR RESPONSE:
+- intuitive_explanation: Simple, intuitive explanation using analogies
+- technical_explanation: Rigorous technical explanation with formulas
+- key_takeaway: One sentence capturing the core insight
+- why_matters: 2-3 sentences explaining importance
+- concepts_covered: List of key concepts (3-5 items)
+
+User question: {question}"""
+    
+    # Use structured output
+    structured_llm = llm.with_structured_output(ConceptExplanationResponse)
+    
+    return structured_llm, full_prompt
+
+
+def explain_concept_with_context(
+    question: str,
+    user_profile: Optional[UserProfile] = None,
+    context: Optional[Dict[str, Any]] = None,
+    memory_context: Optional[Dict[str, Any]] = None
+) -> str:
+    """
+    Explains a concept with RAG enhancement and memory context.
+    
+    v0.3: Now searches user's documents for relevant context.
+    v0.4: Also uses memory context from previous conversations.
     
     Args:
         question: The concept to explain
+        user_profile: User profile for personalization
+        context: RAG context (legacy parameter, kept for compatibility)
+        memory_context: Memory context from previous conversations (v0.4 NEW!)
     
     Returns:
-        Dictionary with structured explanation sections:
-        {
-            "intuitive": str,
-            "technical": str,
-            "key_takeaway": str,
-            "why_matters": str,
-            "full_response": str
-        }
+        Formatted explanation text
     """
+    # Try to get document context via RAG
+    document_context = ""
+    has_rag_context = False
     
-    full_response = explain_concept(question, level="both")
+    if user_profile:
+        try:
+            from academe.rag import RAGPipeline
+            from academe.documents import DocumentManager
+            
+            # Check if user has documents
+            doc_manager = DocumentManager()
+            user_docs = doc_manager.get_user_documents(user_profile.id)
+            
+            if user_docs:
+                # Search user's documents for relevant context
+                rag = RAGPipeline()
+                answer, sources = rag.query_with_context(
+                    query=question,
+                    user=user_profile,
+                    top_k=3,
+                    use_reranking=True
+                )
+                
+                if sources:
+                    # Build context from sources
+                    context_parts = []
+                    for source in sources[:3]:
+                        source_text = f"[From: {source.document.title or source.document.original_filename}"
+                        if source.chunk.page_number:
+                            source_text += f", p. {source.chunk.page_number}"
+                        source_text += f"]\n{source.chunk.content[:300]}..."
+                        context_parts.append(source_text)
+                    
+                    document_context = "\n\n".join(context_parts)
+                    has_rag_context = True
+        except Exception as e:
+            # RAG failed, continue without it
+            import logging
+            logging.warning(f"RAG lookup failed: {e}")
     
-    # Parse sections (basic parsing - can be improved)
-    result = {
-        "full_response": full_response,
-        "intuitive": "",
-        "technical": "",
-        "key_takeaway": "",
-        "why_matters": ""
-    }
+    # Build memory context string (v0.4 NEW!)
+    memory_context_str = ""
+    if memory_context:
+        memory_parts = []
+        
+        # Add relevant concepts
+        if memory_context.get("relevant_concepts"):
+            memory_parts.append(f"Recently studied concepts: {', '.join(memory_context['relevant_concepts'])}")
+        
+        # Add weak areas
+        if memory_context.get("weak_areas"):
+            memory_parts.append(f"Struggling with: {', '.join(memory_context['weak_areas'])}")
+        
+        # Add current topic
+        if memory_context.get("memory", {}).get("current_topic"):
+            memory_parts.append(f"Currently focusing on: {memory_context['memory']['current_topic']}")
+        
+        # Add follow-up indicator
+        if memory_context.get("is_followup"):
+            memory_parts.append("This is a follow-up question to previous topics")
+        
+        if memory_parts:
+            memory_context_str = "\n\nLEARNING CONTEXT:\n" + "\n".join(f"- {part}" for part in memory_parts)
+            memory_context_str += "\n\nADAPT YOUR EXPLANATION:\n"
+            memory_context_str += "- Build on concepts they've already studied\n"
+            memory_context_str += "- Simplify or avoid their weak areas\n"
+            memory_context_str += "- Connect to their current focus topic if relevant\n"
+            if memory_context.get("is_followup"):
+                memory_context_str += "- Reference your previous explanations naturally\n"
     
-    # Simple section extraction
-    sections = full_response.split("##")
-    for section in sections:
-        section = section.strip()
-        if section.startswith("Intuitive"):
-            result["intuitive"] = section
-        elif section.startswith("Technical"):
-            result["technical"] = section
-        elif section.startswith("Key Takeaway"):
-            result["key_takeaway"] = section
-        elif section.startswith("Why This Matters"):
-            result["why_matters"] = section
+    # Create explainer
+    structured_llm, prompt_template = create_personalized_explainer(
+        user=user_profile,
+        use_rag=has_rag_context
+    )
     
-    return result
+    # Format prompt with RAG context, memory context, or both
+    if has_rag_context:
+        formatted_prompt = prompt_template.format(
+            question=question,
+            document_context=document_context
+        )
+    else:
+        # Remove the {document_context} placeholder if no RAG
+        formatted_prompt = prompt_template.replace(
+            "\n\nDOCUMENT CONTEXT:\n{document_context}\n\nIMPORTANT: If document context is provided above, use it to enhance your explanation:\n- Reference specific examples from the user's materials\n- Use terminology consistent with their documents\n- Cite page numbers or sections when relevant\n- If context conflicts with general knowledge, prioritize the user's materials",
+            ""
+        ).format(question=question)
+    
+    # Add memory context to the prompt
+    if memory_context_str:
+        formatted_prompt += memory_context_str
+    
+    # Get structured response
+    response = structured_llm.invoke(formatted_prompt)
+    
+    # Format for display
+    output = []
+    
+    if response.intuitive_explanation:
+        output.append("## Intuitive Explanation\n")
+        output.append(response.intuitive_explanation)
+        output.append("\n\n")
+    
+    if response.technical_explanation:
+        output.append("## Technical Explanation\n")
+        output.append(response.technical_explanation)
+        output.append("\n\n")
+    
+    output.append("## Key Takeaway\n")
+    output.append(response.key_takeaway)
+    output.append("\n\n")
+    
+    output.append("## Why This Matters\n")
+    output.append(response.why_matters)
+    
+    # Add note if using document context
+    if has_rag_context:
+        output.append("\n\n💡 *This explanation was enhanced using content from your documents.*")
+    
+    return "".join(output)
 
 
-# Export main functions
+def explain_concept(
+    question: str,
+    user: Optional[UserProfile] = None
+) -> ConceptExplanationResponse:
+    """
+    Explains a concept with personalization (structured output).
+    
+    Args:
+        question: The concept to explain
+        user: User profile for personalization
+    
+    Returns:
+        Structured ConceptExplanationResponse
+    """
+    structured_llm, prompt_template = create_personalized_explainer(user, use_rag=False)
+    
+    # Invoke with structured output
+    response = structured_llm.invoke(
+        prompt_template.format(question=question)
+    )
+    
+    return response
+
+
+def explain_concept_as_text(
+    question: str,
+    user: Optional[UserProfile] = None
+) -> str:
+    """
+    Get explanation as formatted text for display.
+    
+    Args:
+        question: The concept to explain
+        user: User profile for personalization
+    
+    Returns:
+        Formatted text response
+    """
+    # Use the RAG-enhanced version
+    return explain_concept_with_context(question, user, context=None)
+
+
 __all__ = [
     "explain_concept",
-    "explain_concept_interactive",
-    "create_concept_explainer"
+    "explain_concept_as_text",
+    "explain_concept_with_context",
+    "create_personalized_explainer",
+    "get_personalized_instructions"
 ]

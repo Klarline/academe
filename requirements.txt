@@ -9,8 +9,43 @@ langchain-openai==0.2.9
 python-dotenv==1.0.0
 pydantic==2.10.4
 pydantic-settings==2.7.0
+sentence-transformers>=2.2.2  # Real semantic embeddings
+
+# Database
+pymongo==4.6.1
+motor==3.3.2
+
+# Task Queue (Celery)
+celery==5.3.4
+redis==5.0.1
+kombu==5.3.4
+
+# Authentication
+bcrypt==4.1.2
+python-jose[cryptography]==3.3.0
+passlib==1.7.4
+email-validator>=2.1.0
+
+# CLI Enhancement
+rich==13.7.0
+
+# Document Processing
+PyPDF2==3.0.1
+
+# Data Analysis
+numpy>=1.26.0
+pandas>=2.2.0
+scikit-learn>=1.4.0
+
+# LLM Router
+jsonschema==4.19.0
+
+# Evaluation Framework
+ragas==0.1.0
+datasets==2.14.0
 
 # Development
 ipython==8.12.0
 pytest==8.3.4
 pytest-cov==6.0.0
+pytest-asyncio==0.21.1

@@ -30,7 +30,24 @@ class Settings(BaseSettings):
     
     # App Settings
     log_level: str = "INFO"
-    
+
+    # MongoDB Configuration
+    mongodb_uri: str = "mongodb://admin:academe123@localhost:27017/"
+    mongodb_db_name: str = "academe"
+
+    # JWT Configuration
+    jwt_secret_key: str = "your-secret-key-change-this-in-production"
+    jwt_algorithm: str = "HS256"
+    jwt_expiration_hours: int = 24
+
+    # Session Configuration
+    session_timeout_minutes: int = 60
+    max_sessions_per_user: int = 5
+
+    # Celery Configuration
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/1"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -54,5 +71,9 @@ def validate_api_keys():
     elif provider == "openai" and not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY not found in .env file")
 
-# Validate on import
-validate_api_keys()
+# Validate on import (only for main CLI, not for all imports)
+# validate_api_keys()  # Moved to main.py to avoid validation during testing
+
+def get_settings() -> Settings:
+    """Get the global settings instance."""
+    return settings

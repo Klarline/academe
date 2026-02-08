@@ -1,125 +1,153 @@
 """
-LangGraph workflow for the Academe multi-agent system.
+LangGraph workflow definition for Academe
 
-This module defines the complete workflow graph that connects
-all agents together.
+Defines the complete multi-agent workflow using LangGraph.
 """
 
+import logging
 from typing import Literal
+
 from langgraph.graph import StateGraph, END
 
-from academe.graph.state import AcademicAssistantState
+from academe.graph.state import WorkflowState
 from academe.graph.nodes import (
+    check_documents_node,
     router_node,
     concept_explainer_node,
-    code_helper_node
+    code_helper_node,
+    research_agent_node
 )
 
+logger = logging.getLogger(__name__)
 
-def route_to_agent(state: AcademicAssistantState) -> Literal["concept", "code"]:
+
+def should_use_research(state: WorkflowState) -> Literal["research", "concept", "code"]:
     """
-    Conditional routing function.
-    
-    This function is used by LangGraph to decide which path to take
-    after the router node. It reads the routing decision from the state.
+    Conditional edge - determine which agent to use based on routing.
     
     Args:
         state: Current workflow state
     
     Returns:
-        Name of the node to route to ("concept" or "code")
+        Next node to execute
     """
-    return state["route"]
+    route = state.get("route", "concept")
+    return route
 
 
-def create_workflow():
+def build_workflow() -> StateGraph:
     """
-    Creates the complete LangGraph workflow for Academe.
-    
-    The workflow structure:
-    1. Start with router_node (analyzes query)
-    2. Router conditionally routes to either:
-       - concept_explainer_node (for explanations)
-       - code_helper_node (for code generation)
-    3. Both agents end the workflow
+    Build the complete LangGraph workflow.
     
     Returns:
-        Compiled LangGraph application ready to process queries
+        Configured StateGraph
     """
+    # Create workflow
+    workflow = StateGraph(WorkflowState)
     
-    # Initialize the graph with our state type
-    workflow = StateGraph(AcademicAssistantState)
-    
-    # Add nodes to the graph
+    # Add nodes
+    workflow.add_node("check_documents", check_documents_node)
     workflow.add_node("router", router_node)
-    workflow.add_node("concept", concept_explainer_node)
-    workflow.add_node("code", code_helper_node)
+    workflow.add_node("concept_explainer", concept_explainer_node)
+    workflow.add_node("code_helper", code_helper_node)
+    workflow.add_node("research_agent", research_agent_node)
     
-    # Set entry point (where the workflow starts)
-    workflow.set_entry_point("router")
+    # Define edges
+    workflow.set_entry_point("check_documents")
+    workflow.add_edge("check_documents", "router")
     
-    # Add conditional routing from router to agents
-    # After router_node runs, call route_to_agent() to decide the next node
+    # Conditional routing based on router decision
     workflow.add_conditional_edges(
-        "router",           # From this node
-        route_to_agent,     # Use this function to decide
+        "router",
+        should_use_research,
         {
-            "concept": "concept",  # If returns "concept", go to concept node
-            "code": "code"          # If returns "code", go to code node
+            "concept": "concept_explainer",
+            "code": "code_helper",
+            "research": "research_agent"
         }
     )
     
-    # Both agents end the workflow
-    workflow.add_edge("concept", END)
-    workflow.add_edge("code", END)
+    # All agents lead to END
+    workflow.add_edge("concept_explainer", END)
+    workflow.add_edge("code_helper", END)
+    workflow.add_edge("research_agent", END)
     
-    # Compile the graph into an executable application
-    app = workflow.compile()
-    
-    return app
+    return workflow.compile()
 
 
-# Convenience function to process a query
-def process_query(question: str) -> dict:
+# Create compiled workflow
+compiled_workflow = build_workflow()
+
+
+def process_with_langgraph(
+    question: str,
+    user_id: str,
+    conversation_id: str,
+    user_profile: dict = None
+) -> WorkflowState:
     """
-    Process a user query through the complete workflow.
+    Process query using LangGraph workflow with memory context.
     
-    This is a convenience function that:
-    1. Creates the initial state
-    2. Runs the workflow
-    3. Returns the final result
+    v0.4: Now builds memory context before processing.
     
     Args:
-        question: User's question or request
+        question: User's question
+        user_id: User ID
+        conversation_id: Conversation ID
+        user_profile: User profile dict
     
     Returns:
-        Dictionary containing the final state with response
-    
-    Example:
-        >>> result = process_query("What is gradient descent?")
-        >>> print(result["response"])
+        Final workflow state
     """
+    # Build memory context (v0.4 NEW!)
+    memory_context = None
+    try:
+        from academe.memory.context_manager import ContextManager
+        from academe.database import UserRepository
+        
+        # Get full user profile
+        user_repo = UserRepository()
+        user = user_repo.get_user_by_id(user_id)
+        
+        if user:
+            # Build intelligent memory context
+            context_manager = ContextManager()
+            memory_context = context_manager.build_agent_context(
+                user=user,
+                query=question,
+                conversation_id=conversation_id
+            )
+            
+            logger.info(f"Built memory context for user {user_id}")
+            
+            # Log what memory found
+            if memory_context.get("relevant_concepts"):
+                logger.info(f"Relevant concepts: {memory_context['relevant_concepts']}")
+            if memory_context.get("weak_areas"):
+                logger.info(f"Weak areas: {memory_context['weak_areas']}")
+                
+    except Exception as e:
+        logger.warning(f"Failed to build memory context: {e}")
+        memory_context = None
     
-    # Create the workflow
-    app = create_workflow()
+    # Create initial state with memory
+    initial_state = WorkflowState(
+        question=question,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        user_profile=user_profile,
+        memory_context=memory_context  # Pass memory to workflow
+    )
     
-    # Create initial state
-    initial_state: AcademicAssistantState = {
-        "question": question,
-        "route": "concept",  # Will be overwritten by router
-        "response": "",
-        "agent_used": "",
-        "error": None
-    }
-    
-    # Run the workflow
-    final_state = app.invoke(initial_state)
+    # Run workflow
+    final_state = compiled_workflow.invoke(initial_state)
     
     return final_state
 
 
-# Export main functions
+# Export
 __all__ = [
-    "create_workflow",
-    "process_query"
+    "build_workflow",
+    "compiled_workflow",
+    "process_with_langgraph"
 ]
