@@ -6,13 +6,17 @@ This script tests that memory context is properly built and passed to agents.
 
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent))
 
-from academe.database import init_database
-from academe.database import UserRepository
-from academe.database.progress_repository import ProgressRepository
-from academe.memory.context_manager import ContextManager
-from academe.models import ConceptMastery
+# Add src to Python path for standalone execution
+src_path = Path(__file__).parent.parent / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
+from core.database import init_database
+from core.database import UserRepository
+from core.database.progress_repository import ProgressRepository
+from core.memory.context_manager import ContextManager
+from core.models import ConceptMastery
 
 print("="*80)
 print("Testing Memory Integration - v0.4")
@@ -128,7 +132,7 @@ else:
 
 # Test full workflow integration
 print("\n6. Testing full workflow with memory...")
-from academe.graph.workflow import process_with_langgraph
+from core.graph.workflow import process_with_langgraph
 
 try:
     final_state = process_with_langgraph(

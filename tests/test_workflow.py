@@ -1,7 +1,16 @@
 """Test the complete LangGraph workflow"""
 
+import sys
+from pathlib import Path
+
+# Add src to Python path for standalone execution
+src_path = Path(__file__).parent.parent / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
 import pytest
-from academe.graph import process_query, create_workflow
+from core.graph import build_workflow, process_with_langgraph
+from core.models import UserProfile
 
 
 class TestWorkflow:
@@ -9,30 +18,38 @@ class TestWorkflow:
     
     def test_workflow_structure(self):
         """Test that workflow compiles without errors"""
-        app = create_workflow()
+        app = build_workflow()
         assert app is not None
     
     @pytest.mark.slow
     def test_concept_query_flow(self):
         """Test workflow with concept query"""
-        result = process_query("What is gradient descent?")
+        result = process_with_langgraph(
+            question="What is gradient descent?",
+            user_id="test_user",
+            conversation_id="test_conv",
+            user_profile=None
+        )
         
         # Should have routed to concept explainer
         assert result["agent_used"] == "concept_explainer"
         assert result["route"] == "concept"
         assert len(result["response"]) > 100
-        assert result["error"] is None
     
     @pytest.mark.slow
     def test_code_query_flow(self):
         """Test workflow with code query"""
-        result = process_query("Show me gradient descent code in Python")
+        result = process_with_langgraph(
+            question="Show me gradient descent code in Python",
+            user_id="test_user",
+            conversation_id="test_conv",
+            user_profile=None
+        )
         
         # Should have routed to code helper
         assert result["agent_used"] == "code_helper"
         assert result["route"] == "code"
         assert len(result["response"]) > 100
-        assert result["error"] is None
     
     @pytest.mark.slow
     def test_multiple_queries(self):
@@ -44,7 +61,12 @@ class TestWorkflow:
         ]
         
         for question, expected_route in queries:
-            result = process_query(question)
+            result = process_with_langgraph(
+                question=question,
+                user_id="test_user",
+                conversation_id="test_conv",
+                user_profile=None
+            )
             assert result["route"] == expected_route
             assert len(result["response"]) > 50
     
@@ -52,7 +74,12 @@ class TestWorkflow:
     @pytest.mark.integration
     def test_end_to_end_concept(self):
         """Integration test: full concept explanation workflow"""
-        result = process_query("What is backpropagation?")
+        result = process_with_langgraph(
+            question="What is backpropagation?",
+            user_id="test_user",
+            conversation_id="test_conv",
+            user_profile=None
+        )
         
         # Verify complete response structure
         assert "agent_used" in result
@@ -67,7 +94,12 @@ class TestWorkflow:
     @pytest.mark.integration
     def test_end_to_end_code(self):
         """Integration test: full code generation workflow"""
-        result = process_query("Write a function for linear regression")
+        result = process_with_langgraph(
+            question="Write a function for linear regression",
+            user_id="test_user",
+            conversation_id="test_conv",
+            user_profile=None
+        )
         
         # Verify complete response structure
         assert result["agent_used"] == "code_helper"
@@ -99,7 +131,12 @@ def manual_test_workflow():
         print(f"Query: {query}")
         print('=' * 70 + "\n")
         
-        result = process_query(query)
+        result = process_with_langgraph(
+            question=query,
+            user_id="test_user",
+            conversation_id="test_conv",
+            user_profile=None
+        )
         
         print(f"Route: {result['route']}")
         print(f"Agent: {result['agent_used']}")

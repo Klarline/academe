@@ -1,6 +1,17 @@
 """Quick test to verify configuration works"""
 
-from academe.config import settings, get_llm
+import sys
+from pathlib import Path
+
+# Add src to Python path for standalone execution
+src_path = Path(__file__).parent.parent / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
+from core.config.settings import get_settings
+from core.config import get_llm
+
+settings = get_settings()
 
 print("=" * 60)
 print("Testing Academe Configuration")

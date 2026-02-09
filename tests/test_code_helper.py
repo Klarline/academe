@@ -1,11 +1,15 @@
 """Test the Code Helper agent"""
 
+import sys
+from pathlib import Path
+
+# Add src to Python path for standalone execution
+src_path = Path(__file__).parent.parent / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
 import pytest
-from academe.agents.code_helper import (
-    generate_code,
-    generate_code_with_explanation,
-    generate_code_snippet
-)
+from core.agents.code_helper import generate_code, generate_code_with_context
 
 
 class TestCodeHelper:
@@ -21,39 +25,24 @@ class TestCodeHelper:
         assert len(result) > 100
     
     @pytest.mark.slow
-    def test_generate_code_with_explanation_minimal(self):
-        """Test minimal explanation level"""
-        result = generate_code_with_explanation(
-            "gradient descent",
-            detail_level="minimal"
+    def test_generate_code_with_context(self):
+        """Test code generation with context"""
+        result = generate_code_with_context(
+            question="Implement gradient descent",
+            user_profile=None,
+            context=None,
+            memory_context=None
         )
         
         assert len(result) > 50
     
     @pytest.mark.slow
-    def test_generate_code_with_explanation_detailed(self):
-        """Test detailed explanation level"""
-        result = generate_code_with_explanation(
-            "k-means clustering",
-            detail_level="detailed"
-        )
+    def test_generate_code_simple(self):
+        """Test simple code generation"""
+        result = generate_code("k-means clustering")
         
-        # Detailed should be longer than minimal
+        # Should be longer with context
         assert len(result) > 100
-    
-    @pytest.mark.slow
-    def test_generate_code_snippet_structured(self):
-        """Test structured output for UI"""
-        result = generate_code_snippet("Implement PCA from scratch")
-        
-        # Should return dictionary
-        assert isinstance(result, dict)
-        assert "full_response" in result
-        assert "code" in result
-        assert "example" in result
-        
-        # Should have content
-        assert len(result["full_response"]) > 100
     
     def test_different_implementations(self):
         """Test that function accepts various concepts"""

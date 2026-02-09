@@ -6,7 +6,11 @@ This script verifies that real embeddings are installed and working.
 
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent))
+
+# Add src to Python path for standalone execution
+src_path = Path(__file__).parent.parent / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
 
 print("="*80)
 print("Testing Real Embeddings - Semantic Similarity Check")
@@ -24,7 +28,7 @@ except ImportError:
 
 # Test 2: Check Academe's embedding service
 print("\n2. Checking Academe's embedding service...")
-from academe.vectors.embeddings import EmbeddingService
+from core.vectors.embeddings import EmbeddingService
 
 embedding_service = EmbeddingService()
 

@@ -5,6 +5,12 @@ langchain-google-genai==2.0.5
 langchain-anthropic==0.2.4
 langchain-openai==0.2.9
 
+# FastAPI & Web Framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+websockets==14.1
+
 # Utilities
 python-dotenv==1.0.0
 pydantic==2.10.4

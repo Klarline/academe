@@ -1,7 +1,15 @@
 """Test the router agent with pytest"""
 
+import sys
+from pathlib import Path
+
+# Add src to Python path for standalone execution
+src_path = Path(__file__).parent.parent / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
 import pytest
-from academe.agents.router import route_query
+from core.agents.router import route_query
 
 
 class TestRouterAgent:

@@ -1,10 +1,15 @@
 """Test the Concept Explainer agent"""
 
+import sys
+from pathlib import Path
+
+# Add src to Python path for standalone execution
+src_path = Path(__file__).parent.parent / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
 import pytest
-from academe.agents.concept_explainer import (
-    explain_concept,
-    explain_concept_interactive
-)
+from core.agents.concept_explainer import explain_concept, explain_concept_with_context
 
 
 class TestConceptExplainer:
@@ -39,18 +44,18 @@ class TestConceptExplainer:
         assert len(result) > 50
     
     @pytest.mark.slow
-    def test_explain_interactive(self):
-        """Test interactive structured output"""
-        result = explain_concept_interactive("What is backpropagation?")
+    def test_explain_with_context(self):
+        """Test explanation with context"""
+        result = explain_concept_with_context(
+            question="What is backpropagation?",
+            user_profile=None,
+            context=None,
+            memory_context=None
+        )
         
-        # Should return dictionary with expected keys
-        assert isinstance(result, dict)
-        assert "full_response" in result
-        assert "intuitive" in result
-        assert "technical" in result
-        
-        # Should have content
-        assert len(result["full_response"]) > 100
+        # Should return string response
+        assert isinstance(result, str)
+        assert len(result) > 100
     
     def test_different_concepts(self):
         """Test that different concepts produce different outputs"""
