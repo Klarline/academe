@@ -1,8 +1,10 @@
 # Environment
 .env
 *.env
+.env.local
+!.env.example
 
-# Python
+# Python (Backend)
 __pycache__/
 *.py[cod]
 *$py.class
@@ -11,6 +13,11 @@ __pycache__/
 venv/
 ENV/
 env/
+
+# Evaluation results
+evaluation_results.json
+*_evaluation.json
+ragas_results.json
 
 # Conda
 *.conda
@@ -39,3 +46,12 @@ build/
 document_storage/
 *.pdf
 *.docx
+
+# Frontend (Next.js)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.vercel/
+frontend/*.tsbuildinfo
+frontend/next-env.d.ts

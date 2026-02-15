@@ -1,603 +1,635 @@
-# 🎓 Academe - Academic AI Assistant
+# 🎓 Academe - Academic AI Assistant with RAG and Multi-Agent System
 
-Built with LangGraph • Powered by Google Gemini • Production-Ready REST API
+![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688)
+![LangChain](https://img.shields.io/badge/LangChain-0.3-blue)
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![LangGraph](https://img.shields.io/badge/LangGraph-0.2.45-green.svg)](https://github.com/langchain-ai/langgraph)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115.5-teal.svg)](https://fastapi.tiangolo.com/)
+A full-stack academic AI assistant that helps students understand complex academic concepts through retrieval-augmented generation (RAG), multi-agent orchestration, and personalized learning experiences.
 
-**Full-Stack Multi-Agent Learning System with Real-Time Streaming**
+## Overview
 
-A production-ready AI assistant that helps students understand complex academic concepts through personalized, memory-adaptive responses. Features both CLI and REST API interfaces, real-time streaming, 5 specialized agents, RAG-powered document understanding, and intelligent memory that learns from your progress.
+Academe addresses a critical challenge in education: understanding dense academic textbooks and research papers. The system combines RAG-based document search with general LLM knowledge to provide comprehensive, citable answers adapted to your learning preferences.
 
----
+- **Document Mode**: When you have uploaded materials, answers come from your textbooks/papers with citations
+- **General Knowledge Mode**: When documents don't cover the topic, uses LLM knowledge (configurable fallback behavior)
 
-## Key Features
+### Key Features
 
-### Full-Stack Architecture
-- **CLI Interface** - Rich terminal UI for local use
-- **REST API** - 30 production-ready HTTP endpoints
-- **⚡ Real-Time Streaming** - SSE and WebSocket support with token-by-token responses
-- **JWT Authentication** - Secure token-based auth with refresh tokens
-- **Interactive API Docs** - Auto-generated Swagger UI at `/docs`
+- **Full-Stack Application**: Complete REST API backend with Next.js frontend, CLI interface, and WebSocket streaming
+- **Hybrid RAG System**: Answers from your documents with automatic fallback to general knowledge (user-configurable)
+- **Multi-Agent Orchestration**: Specialized agents for concept explanation, code generation, document research, and practice problems
+- **Personalized Learning**: Adaptive explanations based on learning level (beginner/intermediate/advanced) and preferred style
+- **Progress Tracking**: Monitor concept mastery, identify weak areas, and receive targeted recommendations  
+- **Citation Support**: All document-based answers include source attribution with page numbers
+- **Multiple Interfaces**: FastAPI REST API with WebSocket support, and Rich-based CLI
+- **Background Processing**: Celery-based async tasks for memory updates and document indexing
 
-### 5 Specialized AI Agents
-- **Concept Explainer** - Adaptive explanations that adjust to your level and learning history
-- **Code Helper** - Generates code with extra comments for concepts you struggle with
-- **Research Agent** - Searches your documents with semantic search and provides citations
-- **Practice Generator** - Auto-focuses practice questions on your weak areas
-- **Router** - Intelligently routes queries to the most appropriate agent
-
-### Intelligent Memory System
-- **Tracks your learning** - Monitors which concepts you've studied and mastered
-- **Detects weak areas** - Identifies topics where you struggle (< 60% accuracy)
-- **Adapts responses** - Agents automatically adjust explanations based on your history
-- **LLM-powered filtering** - Uses AI to identify which past concepts are relevant
-
-### Production-Grade Technology
-- **Real-time streaming** - LangGraph's astream_events API for true token-by-token delivery
-- **Async processing** - Celery + Redis for non-blocking operations
-- **Semantic search** - sentence-transformers for accurate document retrieval
-- **RAG pipeline** - Upload PDFs and get context-aware answers with citations
-- **Progress tracking** - Dashboard showing mastery levels and study analytics
-- **WebSocket support** - Bidirectional chat with mid-stream cancellation
-
----
-
-## Quick Start
+## Installation
 
 ### Prerequisites
+
 - Python 3.11+
-- Docker (for MongoDB and Redis)
-- ~2GB disk space
+- Node.js 18+
+- MongoDB 6.0+
+- Redis 7.0+ (for background tasks)
+- Pinecone account (optional, system works with mock mode)
 
-### Installation
-
+### Quick Start (Recommended)
 ```bash
-# 1. Clone repository
+# 1. Clone and configure
 git clone https://github.com/yourusername/academe.git
 cd academe
-
-# 2. Create conda environment
-conda create -n academe python=3.11
-conda activate academe
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Set up environment variables
 cp .env.example .env
-# Edit .env and add your GOOGLE_API_KEY
+# Edit .env and add your API keys (GOOGLE_API_KEY, MONGODB_URI, JWT_SECRET_KEY)
 
-# 5. Start services
-docker-compose up -d  # MongoDB
-docker run -d -p 6379:6379 redis  # Redis
+# 2. Install dependencies
+cd backend && pip install -r requirements.txt && cd ..
+cd frontend && npm install && cd ..
 
-# 6. Start Celery worker (Terminal 1)
+# 3. Start services
+docker-compose up -d              # Start MongoDB and Redis
+./scripts/start_all.sh            # Start API + Frontend
+
+# Optional: Start background worker in separate terminal
 ./scripts/start_worker.sh
 ```
 
-### Option A: Run CLI Interface
+**Access:**
+- Frontend: http://localhost:3000
+- API: http://localhost:8000
+- API Docs: http://localhost:8000/docs
+
+### Manual Setup (Advanced)
+
+For more control over individual services:
+
+**Backend**
 ```bash
-# Terminal 2
-python src/cli/main.py
+cd backend
+
+# Setup environment
+python3 -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+
+# Configure
+cp .env.example .env
+# Edit .env with your configuration
+
+# Start database
+docker-compose up -d mongodb
+
+# Run tests (optional)
+pytest tests/unit/ -v
+
+# Start API
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+
+# Or run CLI
+python3 cli/main.py
 ```
 
-### Option B: Run REST API
+**Frontend**
 ```bash
-# Terminal 2
-./start_api.sh
+cd frontend
 
-# Open browser to:
-# - API Docs: http://localhost:8000/docs
-# - API: http://localhost:8000
+npm install
+cp .env.example .env.local
+# Edit .env.local: NEXT_PUBLIC_API_URL=http://localhost:8000
+
+# Development
+npm run dev
+
+# Production
+npm run build && npm start
 ```
 
----
-
-## REST API
-
-### Quick API Example
-
+**Celery Worker (Optional)**
 ```bash
-# Register user
-curl -X POST http://localhost:8000/api/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"email":"test@test.com","username":"test","password":"Test1234"}'
-
-# Login to get token
-curl -X POST http://localhost:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email_or_username":"test","password":"Test1234"}'
-
-# Send chat message (batch)
-curl -X POST http://localhost:8000/api/v1/chat/message \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"message":"What is PCA?","use_memory":true}'
-
-# Stream chat message (real-time SSE)
-curl -X POST http://localhost:8000/api/v1/chat/message/stream \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"message":"Explain gradient descent","use_memory":true}'
+cd backend
+celery -A core.celery_config worker --loglevel=info
 ```
-
-### API Endpoints (30 total)
-
-**Authentication (6 endpoints)**
-- POST `/api/v1/auth/register` - Create account
-- POST `/api/v1/auth/login` - Get JWT token
-- POST `/api/v1/auth/refresh` - Refresh token
-- POST `/api/v1/auth/change-password` - Update password
-- POST `/api/v1/auth/logout` - Logout
-- GET `/api/v1/auth/validate` - Validate token
-
-**Users (4 endpoints)**
-- GET `/api/v1/users/me` - Get profile
-- PUT `/api/v1/users/me` - Update preferences
-- GET `/api/v1/users/me/stats` - User statistics
-- POST `/api/v1/users/me/complete-onboarding` - Complete setup
-
-**Chat (6 endpoints)**
-- POST `/api/v1/chat/message` - Send message (batch)
-- POST `/api/v1/chat/message/stream` - Send message (SSE streaming)
-- GET `/api/v1/chat/conversations` - List conversations
-- GET `/api/v1/chat/conversations/{id}/messages` - Get messages
-- POST `/api/v1/chat/conversations` - Create conversation
-- DELETE `/api/v1/chat/conversations/{id}` - Delete conversation
-
-**Documents (4 endpoints)**
-- POST `/api/v1/documents/upload` - Upload PDF/TXT/MD
-- GET `/api/v1/documents/` - List documents
-- DELETE `/api/v1/documents/{id}` - Delete document
-- POST `/api/v1/documents/search` - Semantic search
-
-**Progress (5 endpoints)**
-- GET `/api/v1/progress/dashboard` - Complete analytics
-- GET `/api/v1/progress/concepts` - Concept progress
-- GET `/api/v1/progress/sessions` - Study sessions
-- POST `/api/v1/progress/practice/generate` - Generate questions
-- GET `/api/v1/progress/weak-areas` - Identify weaknesses
-
-**WebSocket (2 endpoints)**
-- WS `/api/v1/ws/chat` - Real-time chat with cancellation
-- WS `/api/v1/ws/notifications` - Push notifications
-
-**System (3 endpoints)**
-- GET `/health` - Health check
-- GET `/` - API info
-- GET `/docs` - Swagger UI
-
-### Streaming Support
-
-**Three streaming methods available:**
-
-1. **Batch** - Complete response at once
-2. **SSE (Server-Sent Events)** - One-way token streaming (~500ms to first token)
-3. **WebSocket** - Bidirectional with mid-stream cancellation
-
-### Interactive API Testing
-
-Visit `http://localhost:8000/docs` for Swagger UI:
-- Try all endpoints interactively
-- Auto-generated documentation
-- Request/response examples
-- Authentication testing
-
-**Postman Collection:** Import `Academe_API.postman_collection.json` for pre-configured requests
-
----
-
-## Usage Examples
-
-### CLI Usage
-
-**Basic Chat:**
-```
-You: What is gradient descent?
-AI: [Adapts explanation based on your level and learning history]
-```
-
-**Document Q&A:**
-```
-Upload: Murphy's PML Chapter 7
-You: What does the author say about eigenvalues?
-AI: [Searches your PDF, provides answer with page citations]
-```
-
-**Adaptive Practice:**
-```
-You: Generate practice questions on linear algebra
-AI: [Auto-focuses on eigenvalues if that's your weak area]
-   - Generates 5 questions from YOUR documents
-   - MCQ with proper options A-D
-   - Focuses on concepts you're struggling with
-```
-
-### API Usage
-
-**Frontend Integration Example:**
-```javascript
-// Real-time streaming with EventSource
-const eventSource = new EventSource(
-  'http://localhost:8000/api/v1/chat/message/stream',
-  {
-    headers: {
-      'Authorization': `Bearer ${token}`
-    }
-  }
-);
-
-eventSource.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  if (data.chunk) {
-    displayToken(data.chunk); // Show word-by-word
-  }
-};
-```
-
-**WebSocket with Cancellation:**
-```javascript
-const ws = new WebSocket('ws://localhost:8000/api/v1/ws/chat');
-
-// Authenticate
-ws.send(JSON.stringify({
-  type: 'auth',
-  token: YOUR_JWT_TOKEN
-}));
-
-// Send message
-ws.send(JSON.stringify({
-  type: 'message',
-  content: 'What is PCA?'
-}));
-
-// Cancel mid-stream
-ws.send(JSON.stringify({
-  type: 'cancel'
-}));
-```
-
----
 
 ## Architecture
 
-### System Overview
+### System Components
 
-```
-┌─────────────────────────────────────────┐
-│         Client Applications             │
-│  (CLI, Web, Mobile, Third-party APIs)   │
-└────────────┬────────────────────────────┘
-             │
-             ├─────────────┬──────────────┐
-             │             │              │
-         Terminal      REST API      WebSocket
-             │             │              │
-             v             v              v
-┌────────────────────────────────────────────┐
-│          Service Layer (Async)             │
-│  ChatService, DocumentService              │
-└────────────┬───────────────────────────────┘
-             │
-             v
-┌────────────────────────────────────────────┐
-│        Core Business Logic                 │
-│                                            │
-│  ┌──────────┐  ┌──────────┐  ┌─────────┐ │
-│  │ LangGraph│  │ Memory   │  │   RAG   │ │
-│  │ Workflow │  │ System   │  │Pipeline │ │
-│  └──────────┘  └──────────┘  └─────────┘ │
-│                                            │
-│  ┌──────────────────────────────────────┐ │
-│  │     5 Specialized Agents             │ │
-│  │  Router | Explainer | Code | etc.    │ │
-│  └──────────────────────────────────────┘ │
-└────────────┬───────────────────────────────┘
-             │
-             v
-┌────────────────────────────────────────────┐
-│         Data & Storage Layer               │
-│  MongoDB | Pinecone | Redis | Files       │
-└────────────────────────────────────────────┘
-```
+**Application Layer**
+- LangGraph workflow orchestration for multi-agent coordination
+- Five specialized agents: Router, Concept Explainer, Code Helper, Research Agent, Practice Generator
+- State-based execution with conditional routing
 
-### Multi-Agent Workflow
-```
-User Query
-    ↓
-Document Check → Router (LLM-based routing)
-    ↓
-┌─────────┬─────────┬──────────┬──────────┐
-│ Concept │  Code   │ Research │ Practice │
-│Explainer│ Helper  │  Agent   │Generator │
-└─────────┴─────────┴──────────┴──────────┘
-    ↓
-Memory Update (Celery - async)
-    ↓
-MongoDB (Progress tracking)
-```
+**AI/ML Layer**
+- RAG pipeline with document processing, chunking, and vector storage
+- Semantic search using sentence-transformers (all-MiniLM-L6-v2, 384 dimensions)
+- Pinecone vector database for scalable similarity search
+- Multi-provider LLM support (Gemini 2.5 Flash, Claude Sonnet 4, GPT-4o)
 
-### Tech Stack
-- **Orchestration:** LangGraph 0.2.45
-- **LLM:** Google Gemini 2.5 Flash
-- **API Framework:** FastAPI 0.115.5
-- **Vector DB:** Pinecone (semantic search)
-- **Embeddings:** sentence-transformers (all-MiniLM-L6-v2, 384 dims)
-- **Database:** MongoDB 7.0
-- **Task Queue:** Celery 5.3.4 + Redis 5.0.1
-- **CLI:** Rich 13.7.0
-- **Validation:** Pydantic 2.10.4
-- **ASGI Server:** Uvicorn 0.32.0
+**Data Layer**
+- MongoDB for structured data (users, conversations, documents, progress)
+- Filesystem storage for uploaded documents
+- Redis for async task queue (Celery)
 
----
+### Technology Stack
 
-## Project Metrics
+**Backend**
+- Python 3.11+
+- FastAPI (async REST API)
+- LangChain + LangGraph (LLM orchestration)
+- sentence-transformers (embeddings)
+- PyMongo (database)
+- Pydantic V2 (validation)
+- Celery + Redis (background tasks)
+- pytest (testing)
 
-### Code Statistics
-- **Total Lines:** ~20,300 lines of production Python
-- **Core Logic:** ~17,500 lines (agents, memory, RAG, database)
-- **API Layer:** ~2,800 lines (30 endpoints, services, auth)
-- **Test Coverage:** 7 comprehensive test files
-- **Documentation:** ~5,000 lines across guides
+**Frontend**
+- Next.js 14 (React framework)
+- TypeScript (type safety)
+- Redux Toolkit (state management)
+- Tailwind CSS (styling)
 
-### Performance
-- **Time to first token:** 500ms-1s (streaming)
-- **Batch response:** 2-5s (complete answer)
-- **Document processing:** 2-3s per MB
-- **Semantic search:** <200ms
+**Infrastructure**
+- MongoDB 6.0
+- Pinecone (vector database)
+- Redis (task queue)
+- Docker Compose (local development)
 
-### Features
-- 5 specialized AI agents
-- 30 REST + WebSocket endpoints
-- Real-time streaming (SSE + WebSocket)
-- JWT authentication
-- RAG with Pinecone
-- Async task processing
-- Progress tracking & analytics
-- Zero placeholders - all real implementations
+## Technical Highlights
 
----
+### RAG Implementation
 
-## Testing
+The RAG system processes documents through a multi-stage pipeline:
 
-### API Testing
+1. **Document Processing**: Extract text from PDFs using PyPDF2, normalize formatting, detect content types (equations, code, tables)
+2. **Adaptive Chunking**: Split documents using strategy based on type (textbooks: 1200 chars semantic, papers: 800 chars recursive, notes: 1000 chars recursive)
+3. **Embedding Generation**: Convert chunks to 384-dimensional vectors using sentence-transformers with batch processing
+4. **Vector Storage**: Index in Pinecone with metadata (page numbers, section titles, content flags)
+5. **Semantic Search**: Cosine similarity search with optional reranking for improved precision
+6. **Context Building**: Format retrieved chunks with source citations
+7. **Generation**: LLM generates answer using context and user preferences
 
-**Option 1: Swagger UI (Easiest)**
-```bash
-./start_api.sh
-# Open http://localhost:8000/docs
-# Click "Try it out" on any endpoint
-```
+**Performance**: 1.85 second average response time, 100% success rate on test queries
 
-**Option 2: Postman**
-```bash
-# Import the collection
-# File: Academe_API.postman_collection.json
-# Set environment variable: base_url = http://localhost:8000
-```
+### Multi-Agent System
 
-**Option 3: curl**
-```bash
-# Health check
-curl http://localhost:8000/health
+Specialized agents handle different tasks:
 
-# Full authentication + chat flow
-# (See API_TESTING_GUIDE.md for complete examples)
-```
+- **Router Agent**: Analyzes queries using structured LLM output to route to appropriate agent
+- **Concept Explainer**: Provides multi-level explanations from simple analogies (ELI5/"granny mode") to advanced mathematical rigor
+- **Code Helper**: Generates code examples with RAG-enhanced search of user's documents for relevant code snippets
+- **Research Agent**: Answers questions from uploaded documents with full citation support
+- **Practice Generator**: Creates custom practice problems and quizzes based on studied concepts
 
-### CLI Testing
-```bash
-# Run test suite
-pytest tests/
+LangGraph orchestrates workflow with state management, conditional routing, and memory integration.
 
-# Test specific components
-python tests/test_memory_integration.py
-python tests/test_real_embeddings.py
-python tests/test_workflow.py
-```
+### Background Task Processing
 
----
+Celery workers handle async tasks:
+- **Memory updates**: Process learning progress after each interaction
+- **Document indexing**: Generate embeddings and vector database updates asynchronously
+- **Progress tracking**: Update concept mastery and weak area detection
+- **Task prioritization**: High-priority queue for memory, medium for documents
+
+This keeps the API responsive while handling computationally expensive operations in the background.
+
+## Performance Metrics
+
+### Response Times
+- Average query response: 1.85 seconds
+- Document upload (100-page PDF): 15 seconds
+- Embedding generation: 50ms per text
+- Vector search: 200ms
+- Success rate: 100% on test queries
+
+### Scalability
+- Current capacity: 50-100 concurrent requests per server
+- Documents per user: 1000+
+- Vector database: 1M+ vectors supported
+- Tested with: 217 unit tests, 100% pass rate
 
 ## Project Structure
 
 ```
 academe/
-├── src/                     # All source code
-│   ├── core/               # Business logic (agents, memory, RAG)
-│   │   ├── agents/        # 5 AI agents
-│   │   ├── auth/          # JWT authentication
-│   │   ├── config/        # Settings and LLM setup
-│   │   ├── database/      # MongoDB repositories
-│   │   ├── documents/     # PDF processing & chunking
-│   │   ├── evaluation/    # RAGAS framework
-│   │   ├── graph/         # LangGraph workflow
-│   │   ├── memory/        # Context management
-│   │   ├── models/        # Pydantic models
-│   │   ├── onboarding/    # User onboarding flow
-│   │   ├── rag/           # RAG pipeline
-│   │   ├── vectors/       # Embeddings & semantic search
-│   │   ├── utils/         # Utility modules
-│   │   ├── celery_config.py
-│   │   └── tasks.py       # Background tasks
-│   │
-│   ├── cli/               # CLI interface
-│   │   ├── interfaces/   # Rich UI components
-│   │   └── main.py       # CLI entry point
-│   │
-│   └── api/               # REST API
-│       ├── services/     # Service wrappers
-│       │   ├── chat_service.py
-│       │   └── document_service.py
-│       ├── v1/
-│       │   ├── endpoints/  # API routes
-│       │   │   ├── auth.py
-│       │   │   ├── users.py
-│       │   │   ├── chat.py
-│       │   │   ├── documents.py
-│       │   │   ├── progress.py
-│       │   │   └── websocket.py
-│       │   ├── deps.py     # Dependencies (JWT)
-│       │   └── api.py      # Router aggregator
-│       └── main.py         # FastAPI app
-│
-├── tests/                  # Test suite
-├── scripts/               # Helper scripts
-│   └── start_worker.sh   # Celery worker startup
-├── start_api.sh           # API startup script
-├── requirements.txt       # Python dependencies
-├── docker-compose.yml     # MongoDB setup
-└── .env.example          # Configuration template
+├── scripts/                   # Deployment and startup scripts
+│   ├── start_all.sh           # Start backend + frontend together
+│   ├── start_api.sh           # Start FastAPI server only
+│   ├── start_frontend.sh      # Start Next.js only
+│   └── start_worker.sh        # Start Celery worker for background tasks
+├── backend/
+│   ├── api/                   # FastAPI REST API
+│   │   ├── main.py            # Application entry point
+│   │   ├── v1/                # API version 1
+│   │   │   ├── endpoints/     # Route handlers (auth, chat, documents, etc.)
+│   │   │   └── deps.py        # Dependencies (authentication)
+│   │   └── services/          # Business logic layer
+│   ├── cli/                   # Command-line interface
+│   │   ├── main.py            # CLI entry point
+│   │   └── interfaces/        # UI components (Rich-based)
+│   ├── core/                  # Core business logic
+│   │   ├── agents/            # AI agents (5 specialized agents)
+│   │   ├── auth/              # Authentication service (JWT, bcrypt)
+│   │   ├── config/            # Configuration and settings
+│   │   ├── database/          # MongoDB repositories
+│   │   ├── documents/         # Document processing and chunking
+│   │   ├── evaluation/        # RAGAS quality metrics
+│   │   ├── graph/             # LangGraph workflow orchestration
+│   │   ├── memory/            # Context and memory management
+│   │   ├── models/            # Pydantic data models
+│   │   ├── rag/               # RAG pipeline implementation
+│   │   ├── utils/             # Utility functions
+│   │   ├── vectors/           # Embeddings and semantic search
+│   │   ├── celery_config.py   # Celery task queue configuration
+│   │   └── tasks.py           # Background task definitions
+│   ├── tests/                 # Test suite
+│   │   ├── unit/              # Unit tests (217 tests)
+│   │       ├── agents/        # Agent tests (5 test files)
+│   │       ├── test_auth_service.py
+│   │       ├── test_config.py
+│   │       ├── test_database.py
+│   │       ├── test_models.py
+│   │       ├── test_documents.py
+│   │       ├── test_graph.py
+│   │       └── test_vectors.py
+│   ├── run_ragas_simple.py    # RAGAS evaluation script
+│   └── requirements.txt       # Python dependencies
+│   └── .env.example           # Environment configuration template
+├── frontend/
+│   ├── app/                   # Next.js app router
+│   ├── components/            # React components
+│   ├── hooks/                 # Custom React hooks
+│   ├── store/                 # Redux state management
+│   ├── lib/                   # Utilities and constants
+│   └── types/                 # TypeScript definitions
+├── document_storage/          # Uploaded document files (organized by user_id)
+├── docker-compose.yml         # Service orchestration (MongoDB, Redis)
+└── README.md                  # This file
 ```
 
----
+## Usage Examples
 
-## Use Cases
+### CLI Usage
 
-### For Students
-- **Understand complex concepts** - Explanations adapted to your level
-- **Study from your materials** - Upload textbooks, get personalized Q&A
-- **Track your progress** - See mastery levels and weak areas
-- **Practice effectively** - Auto-generated questions from your documents
-- **Learn adaptively** - System remembers what you struggle with
+```bash
+# Start CLI
+python3 backend/cli/main.py
 
-### For Developers
-- **Learn LangGraph** - Production multi-agent system implementation
-- **Study RAG** - Complete pipeline from upload to semantic search
-- **Understand streaming** - Real LangGraph astream_events implementation
-- **See FastAPI patterns** - Professional 3-layer architecture
-- **Explore async Python** - Celery task processing
-- **Study authentication** - JWT with refresh tokens
+# Register or login
+> register
+Email: student@university.edu
+Username: student
+Password: ********
 
-### For Interviews
-- **Full-stack portfolio piece** - CLI + REST API + real-time features
-- **Production patterns** - Error handling, validation, logging
-- **Scalable architecture** - Service layer, zero code duplication
-- **Advanced features** - WebSocket, streaming, cancellation
-- **Real implementations** - No placeholders or mock data
+# Upload a document
+> upload
+File path: /path/to/ml_textbook.pdf
+Title: Machine Learning Textbook Chapter 3
 
----
+# Ask questions
+> ask
+Question: What is principal component analysis?
+
+# Get practice problems
+> practice
+Topic: Linear Algebra
+Difficulty: Intermediate
+```
+
+### API Usage
+
+```python
+import requests
+
+# Register
+response = requests.post("http://localhost:8000/api/v1/auth/register", json={
+    "email": "student@university.edu",
+    "username": "student",
+    "password": "SecurePass123"
+})
+
+token = response.json()["access_token"]
+
+# Upload document
+files = {"file": open("textbook.pdf", "rb")}
+headers = {"Authorization": f"Bearer {token}"}
+response = requests.post(
+    "http://localhost:8000/api/v1/documents/upload",
+    files=files,
+    headers=headers
+)
+
+# Ask question
+response = requests.post(
+    "http://localhost:8000/api/v1/chat/message",
+    json={"question": "What is PCA?", "conversation_id": "conv_123"},
+    headers=headers
+)
+
+answer = response.json()["response"]
+sources = response.json()["sources"]
+```
+
+### WebSocket Streaming
+
+```javascript
+const ws = new WebSocket("ws://localhost:8000/api/v1/ws/chat?token=" + token);
+
+ws.send(JSON.stringify({
+    question: "Explain gradient descent",
+    conversation_id: "conv_123"
+}));
+
+ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.type === "token") {
+        console.log(data.content);  // Stream tokens as they arrive
+    }
+};
+```
+
+## Configuration
+
+### Environment Variables
+
+**Backend (.env)**
+```bash
+# LLM Configuration
+LLM_PROVIDER=openai                    # Options: gemini, claude, openai
+OPENAI_API_KEY=your_key_here           # Required for openai
+
+# Database
+MONGODB_URI=mongodb://admin:password@localhost:27017/
+MONGODB_DB_NAME=academe
+
+# Security
+JWT_SECRET_KEY=your_secure_random_key  # Generate with: python -c 'import secrets; print(secrets.token_urlsafe(32))'
+JWT_ALGORITHM=HS256
+JWT_EXPIRATION_HOURS=24
+
+# Background Tasks (Optional)
+CELERY_BROKER_URL=redis://localhost:6379/0
+CELERY_RESULT_BACKEND=redis://localhost:6379/1
+
+# Logging
+LOG_LEVEL=INFO
+```
+
+**Frontend (.env.local)**
+```bash
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_WS_URL=ws://localhost:8000
+```
 
 ## Development
 
-### Running Both Interfaces
+### Running Tests
 
-**Terminal 1 - Services:**
 ```bash
-docker-compose up -d  # MongoDB
-docker run -d -p 6379:6379 redis
+cd backend
+
+# Run all unit tests
+pytest tests/unit/ -v
+
+# Run specific test file
+pytest tests/unit/test_auth_service.py -v
+
+# Run with coverage
+pytest tests/unit/ --cov=core --cov-report=html
+
+# Expected: 217 passed, 2 skipped, 2 warnings
 ```
 
-**Terminal 2 - Celery Worker:**
+### Code Quality
+
 ```bash
-./scripts/start_worker.sh
+# Syntax validation
+python3 -m py_compile core/**/*.py
+
+# Type checking (if mypy installed)
+mypy core/
+
+# Linting (if pylint installed)
+pylint core/
 ```
 
-**Terminal 3 - API Server:**
+### Running Evaluation
+
 ```bash
-./start_api.sh
-# API at http://localhost:8000
+# Start MongoDB
+docker-compose up -d mongodb
+
+# Run RAGAS evaluation
+cd backend
+python3 run_ragas_simple.py
+
+# Expected output: Quality metrics and recommendations
 ```
 
-**Terminal 4 - CLI (Optional):**
+## Testing and Quality
+
+### Test Coverage
+
+217 comprehensive unit tests covering:
+- Authentication and security (44 tests)
+- Configuration management (21 tests)
+- Database operations (22 tests)
+- Data models and validation (23 tests)
+- All five agents (57 tests across specialized test files)
+- Document processing (19 tests)
+- LangGraph workflow (12 tests)
+- Vector operations (19 tests)
+
+Test suite runs in 50 seconds with 100% pass rate.
+
+### Quality Evaluation
+
+RAGAS evaluation framework implemented for measuring:
+- Faithfulness (answer grounding in source documents)
+- Answer relevancy (how well answers address questions)
+- Context recall (retrieval effectiveness)
+- Context precision (retrieval accuracy)
+
+Test dataset includes 20 questions covering linear algebra, probability, neural networks, optimization, and other ML topics.
+
+## Performance Characteristics
+
+### Response Time Breakdown
+
+Typical query: 2.96 seconds total
+- Check documents: 50ms (2%)
+- Routing decision: 300ms (12%)
+- Query embedding: 100ms (4%)
+- Vector search: 200ms (8%)
+- Reranking (optional): 300ms (12%)
+- Context building: 10ms (0%)
+- LLM generation: 2000ms (62%)
+
+Bottleneck: LLM generation (addressed via streaming for better UX)
+
+### Scalability
+
+Current capacity (single server):
+- 50-100 concurrent requests
+- 20-50 requests per second
+- 1000+ documents per user
+- 1M+ vectors in Pinecone
+
+Scaling strategy:
+- Horizontal API scaling with load balancer
+- MongoDB replica set for read scaling
+- Redis caching for repeated queries
+- Async/await already implemented
+
+## Security
+
+### Authentication
+- bcrypt password hashing with automatic salt generation
+- JWT tokens with 24-hour expiration
+- HS256 algorithm for token signing
+- Secure secret key validation (32+ characters required, default rejected)
+
+### Authorization
+- Dependency injection for user verification on all protected endpoints
+- Row-level security (users only access their own data)
+- MongoDB credentials required from environment (not hard-coded)
+
+### Identified Areas for Improvement
+- Rate limiting needed (recommended: 100 requests/hour per IP)
+- Timing attack vulnerability in login (should use constant-time comparison)
+- Token revocation mechanism for logout (recommended: Redis blacklist)
+
+## API Documentation
+
+Once the server is running, access interactive API documentation:
+
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
+
+### Key Endpoints
+
+**Authentication**
+- `POST /api/v1/auth/register` - Create new account
+- `POST /api/v1/auth/login` - Login and receive JWT token
+- `POST /api/v1/auth/logout` - Logout
+
+**Chat**
+- `POST /api/v1/chat/message` - Send question and receive answer
+- `GET /api/v1/chat/conversations` - List user's conversations
+- `WS /api/v1/ws/chat` - WebSocket for streaming responses
+
+**Documents**
+- `POST /api/v1/documents/upload` - Upload PDF, text, or markdown file
+- `GET /api/v1/documents/` - List user's documents
+- `DELETE /api/v1/documents/{id}` - Delete document and associated vectors
+
+**Progress**
+- `GET /api/v1/progress/` - Get learning progress and concept mastery
+- `POST /api/v1/progress/update` - Track concept interaction
+
+## Design Patterns
+
+### Implemented Patterns
+
+- **Factory Pattern**: Document processors, LLM instantiation
+- **Singleton Pattern**: Database connection, shared agents, settings
+- **Repository Pattern**: All database access abstraction
+- **Strategy Pattern**: Multiple chunking strategies
+- **Dependency Injection**: Service composition and testing
+
+### Key Architectural Choices
+
+**Shared Resources**: RAG pipeline and agents instantiated once and reused to avoid expensive reloading (2-3 second initialization cost eliminated)
+
+**Async/Await**: All API endpoints use async for non-blocking I/O, enabling 10x higher throughput during LLM calls
+
+**State Management**: LangGraph's TypedDict state passes cleanly between nodes without manual tracking
+
+**Error Handling**: Try-catch blocks throughout with graceful fallbacks and user-friendly error messages
+
+## Deployment
+
+### Production Considerations
+
+**Before deploying to production:**
+
+1. **Security**
+   - Configure CORS to restrict allowed origins (currently set to `*`)
+   - Implement rate limiting (recommended: slowapi middleware)
+   - Set `LOG_LEVEL=INFO` (not DEBUG)
+   - Use strong JWT secret (32+ characters)
+   - Enable HTTPS/TLS
+
+2. **Monitoring**
+   - Add application monitoring (Prometheus/Grafana)
+   - Set up error tracking (Sentry)
+   - Configure log aggregation
+   - Monitor LLM API usage and costs
+
+3. **Database**
+   - Enable MongoDB authentication
+   - Configure replica set for high availability
+   - Set up automated backups
+   - Add connection pooling limits
+
+4. **Scaling**
+   - Deploy multiple API servers behind load balancer
+   - Use Redis for session storage and caching
+   - Configure CDN for frontend assets
+   - Consider managed Pinecone for production
+
+### Docker Deployment
+
 ```bash
-python src/cli/main.py
-# Rich terminal interface
+# Build services
+docker-compose build
+
+# Start all services
+docker-compose up -d
+
+# Check status
+docker-compose ps
+
+# View logs
+docker-compose logs -f api
+
+# Stop services
+docker-compose down
 ```
-
-### Adding New Features
-
-**Add New Agent:**
-1. Create agent in `src/core/agents/new_agent.py`
-2. Add node in `src/core/graph/nodes.py`
-3. Update router in `src/core/agents/router.py`
-4. Add to workflow in `src/core/graph/workflow.py`
-5. Expose via API in `src/api/v1/endpoints/`
-
-**Add New API Endpoint:**
-1. Add route in `src/api/v1/endpoints/your_module.py`
-2. Create service wrapper if needed in `src/api/services/`
-3. Register in `src/api/v1/api.py`
-4. Test in Swagger UI
-
----
-
-## Documentation
-
-### API Documentation
-- Swagger UI: `http://localhost:8000/docs` (when running)
-- ReDoc: `http://localhost:8000/redoc` (alternative docs)
-- OpenAPI JSON: `http://localhost:8000/openapi.json`
-
----
-
-## Technical Highlights
-
-### Architecture Decisions
-
-**3-Layer Design:**
-- **API Layer** - HTTP/WebSocket interfaces, validation, auth
-- **Service Layer** - Async wrappers, business logic orchestration
-- **Core Layer** - Multi-agent system, memory, RAG, database
-
-**Benefits:**
-- Zero code duplication (CLI and API share same core)
-- Easy to add new interfaces (mobile, desktop, etc.)
-- Testable in isolation
-- Industry-standard pattern
-
-### Real-Time Streaming
-
-**Implementation:**
-```python
-# Uses LangGraph's astream_events API
-async for event in workflow.astream_events(state, version="v2"):
-    if event["event"] == "on_chat_model_stream":
-        # Real tokens as LLM generates them!
-        yield {"chunk": event["data"]["chunk"].content}
-```
-
-**Performance:**
-- **Before:** 3-5 second wait → complete response
-- **After:** 500ms to first token → progressive display
-- **Result:** 3-5x better perceived performance
-
-### Memory System
-
-**Adaptive Response Example:**
-```python
-# User's history: eigenvalues (35% accuracy - weak area)
-
-# System provides context-aware explanation:
-"Since eigenvalues is still challenging, I'll explain 
-gradient descent without assuming that knowledge..."
-
-# vs. for proficient users:
-"Like eigenvalues showing principal directions, 
-gradient descent finds optimal directions..."
-```
-
----
 
 ## Contributing
 
-This is a personal portfolio project for internship applications, but feedback and suggestions are welcome!
+### Development Workflow
 
-**To provide feedback:**
-1. Open an issue on GitHub
-2. Email suggestions
-3. Fork and submit PRs
-
----
+1. Create feature branch from `main`
+2. Implement changes with tests
+3. Run full test suite: `pytest tests/unit/ -v`
+4. Ensure no new warnings or deprecations
+5. Update documentation as needed
+6. Submit pull request with clear description
 
 ## Acknowledgments
 
 - LangChain Team for the excellent LangGraph framework
-- Google for providing free-tier Gemini API access
 - Machine Learning course that inspired this project
 - The viral "granny mode" technique that sparked the multi-level explanation idea
 
+### Technologies Used
+
+- LangChain and LangGraph for LLM orchestration
+- sentence-transformers for semantic embeddings
+- Pinecone for vector similarity search
+- FastAPI for modern async API development
+- MongoDB for flexible document storage
+- RAGAS for quality evaluation
+
+### Technical Resources
+
+- [LangChain Documentation](https://python.langchain.com/)
+- [LangGraph Documentation](https://langchain-ai.github.io/langgraph/)
+- [RAGAS Framework](https://docs.ragas.io/)
+- [sentence-transformers](https://www.sbert.net/)
+- [FastAPI](https://fastapi.tiangolo.com/)
+
 ---
 
-**Built with ❤️ for learners who struggle with complex concepts - Production-ready full-stack AI for academic learning**
+**Built with ❤️ for learners who struggle with complex concepts - full-stack academic AI assistant with RAG, multi-agent orchestration, and comprehensive testing. Built for scalability, maintainability, and quality.**

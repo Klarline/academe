@@ -28,18 +28,15 @@ echo "  - Concurrency: 4 workers"
 echo "  - Log level: info"
 echo ""
 
-cd "$(dirname "$0")"
+# Change to project root, then backend directory
+cd "$(dirname "$0")/.."
+export PYTHONPATH="${PYTHONPATH}:$(pwd)/backend"
+cd backend
 
-celery -A academe.celery_config worker \
+celery -A core.celery_config worker \
     --loglevel=info \
     --concurrency=4 \
     --queues=memory,documents,default \
     --max-tasks-per-child=1000 \
     --time-limit=300 \
     --soft-time-limit=240
-
-# Notes:
-# --concurrency=4: Run 4 worker processes
-# --max-tasks-per-child=1000: Restart worker after 1000 tasks (prevents memory leaks)
-# --time-limit=300: Kill task after 5 minutes
-# --soft-time-limit=240: Warn at 4 minutes
