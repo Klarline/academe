@@ -132,7 +132,7 @@ class PracticeQuestion(BaseModel):
     
     question_text: str = Field(description="The actual question text")
     question_type: Literal["mcq", "short", "code", "explain"] = Field(description="Type of question")
-    options: Optional[list] = Field(default=None, description="4 options for mcq type")
+    options: Optional[List[str]] = Field(default=None, description="4 options for mcq type (list of strings)")
     correct_answer: str = Field(description="The correct answer")
     explanation: str = Field(description="Explanation of the answer")
     difficulty: Optional[str] = Field(default=None, description="Difficulty level")

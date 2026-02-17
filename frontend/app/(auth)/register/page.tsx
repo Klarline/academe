@@ -99,7 +99,7 @@ export default function RegisterPage() {
         <h1 className="text-3xl font-bold text-slate-800" style={{ fontFamily: "'Playfair Display', serif" }}>
           Create Your Account
         </h1>
-        <p className="text-slate-600 mt-2">Join Academe and start learning smarter</p>
+        <p className="text-slate-600 mt-2">Join academe and start learning smarter</p>
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8">

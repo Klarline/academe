@@ -13,7 +13,8 @@ from api.v1.endpoints import (
     documents,
     progress,
     websocket,
-    practice
+    practice,
+    research
 )
 
 # Create API router
@@ -60,4 +61,10 @@ api_router.include_router(
     practice.router,
     prefix="/practice",
     tags=["practice"]
+)
+
+api_router.include_router(
+    research.router,
+    prefix="/research",
+    tags=["research"]
 )

@@ -89,5 +89,9 @@ export const API_ENDPOINTS = {
   PROGRESS: {
     GET: '/api/v1/progress/',
     UPDATE: '/api/v1/progress/update'
+  },
+  RESEARCH: {
+    QUERY: '/api/v1/research/query',
+    SUMMARIZE: (id: string) => `/api/v1/research/summarize/${id}`
   }
 } as const;

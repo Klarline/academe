@@ -60,7 +60,7 @@ export default function LoginPage() {
           à
         </div>
         <h1 className="text-3xl font-bold text-slate-800" style={{ fontFamily: "'Playfair Display', serif" }}>
-          Welcome to Academe
+          Welcome to academe
         </h1>
         <p className="text-slate-600 mt-2">Sign in to continue your learning journey</p>
       </div>

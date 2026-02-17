@@ -10,6 +10,8 @@ from . import chat
 from . import documents
 from . import progress
 from . import websocket
+from . import practice
+from . import research
 
 __all__ = [
     "auth",
@@ -18,4 +20,6 @@ __all__ = [
     "documents",
     "progress",
     "websocket",
+    "practice",
+    "research",
 ]

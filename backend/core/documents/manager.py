@@ -185,7 +185,7 @@ class DocumentManager:
             # Save chunks
             chunk_ids = self.chunk_repo.create_chunks(chunks)
 
-            # Update document status
+            # Update document status to ready
             self.doc_repo.update_document(
                 document.id,
                 {
@@ -194,6 +194,14 @@ class DocumentManager:
                     "processed_at": time.time()
                 }
             )
+            
+            # Queue vector indexing as background task
+            try:
+                from core.tasks import index_document_task
+                index_document_task.delay(document.id, document.user_id)
+                logger.info(f"Queued indexing task for document {document.id}")
+            except Exception as e:
+                logger.warning(f"Failed to queue indexing task: {e}. Document processed but not indexed.")
 
             return True, f"Successfully processed: {len(chunks)} chunks created"
 

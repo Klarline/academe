@@ -35,7 +35,7 @@ cd backend
 
 celery -A core.celery_config worker \
     --loglevel=info \
-    --concurrency=4 \
+    --pool=solo \
     --queues=memory,documents,default \
     --max-tasks-per-child=1000 \
     --time-limit=300 \

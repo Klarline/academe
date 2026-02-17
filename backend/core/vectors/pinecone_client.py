@@ -6,16 +6,17 @@ from typing import List, Dict, Optional, Any, Tuple
 
 try:
     import pinecone
-    from pinecone import Index, GRPCIndex
+    from pinecone import Index
     PINECONE_AVAILABLE = True
+    # GRPCIndex not available in pinecone-client 3.0
+    GRPCIndex = Index  # Use regular Index as fallback
 except (ImportError, Exception) as e:
     # Handle both import errors and the package rename exception
     PINECONE_AVAILABLE = False
     # Mock classes for when Pinecone is not installed
     class Index:
         pass
-    class GRPCIndex:
-        pass
+    GRPCIndex = Index
 
 logger = logging.getLogger(__name__)
 
@@ -76,25 +77,28 @@ class PineconeClient:
             return
 
         try:
-            # Initialize Pinecone
-            pinecone.init(
-                api_key=self.api_key,
-                environment=self.environment
-            )
-
+            # Initialize Pinecone (new API - version 3.0+)
+            from pinecone import Pinecone, ServerlessSpec
+            
+            pc = Pinecone(api_key=self.api_key)
+            
+            # List existing indexes
+            existing_indexes = [idx['name'] for idx in pc.list_indexes()]
+            
             # Check if index exists
-            if self.index_name not in pinecone.list_indexes():
+            if self.index_name not in existing_indexes:
                 logger.info(f"Creating Pinecone index: {self.index_name}")
-                pinecone.create_index(
+                pc.create_index(
                     name=self.index_name,
                     dimension=self.dimension,
-                    metric=self.metric
+                    metric=self.metric,
+                    spec=ServerlessSpec(cloud='aws', region='us-east-1')
                 )
-                # Wait for index to be ready
+                logger.info(f"Index {self.index_name} created, waiting for ready...")
                 time.sleep(5)
-
-            # Connect to index
-            self.index = pinecone.Index(self.index_name)
+            
+            # Get index
+            self.index = pc.Index(self.index_name)
             self.mock_mode = False
 
             logger.info(f"Connected to Pinecone index: {self.index_name}")
@@ -405,15 +409,20 @@ class PineconeManager:
         for chunk, embedding in zip(chunks, embeddings):
             vec_id = f"{document_id}_{chunk.get('chunk_index', 0)}"
 
+            # Build metadata, excluding None values (Pinecone rejects null)
             metadata = {
                 "document_id": document_id,
                 "chunk_index": chunk.get("chunk_index", 0),
                 "content": chunk.get("content", "")[:1000],  # Truncate for metadata
-                "page_number": chunk.get("page_number"),
-                "section_title": chunk.get("section_title"),
                 "has_code": chunk.get("has_code", False),
                 "has_equations": chunk.get("has_equations", False)
             }
+            
+            # Add optional fields only if not None
+            if chunk.get("page_number") is not None:
+                metadata["page_number"] = chunk.get("page_number")
+            if chunk.get("section_title") is not None:
+                metadata["section_title"] = chunk.get("section_title")
 
             vectors.append((vec_id, embedding, metadata))
 
@@ -442,6 +451,8 @@ class PineconeManager:
             List of similar chunks with metadata
         """
         namespace = self.client.create_namespace(user_id)
+        
+        logger.info(f"Searching in namespace: {namespace}, top_k: {top_k}, filter: {filter}")
 
         results = self.client.query(
             query_vector=query_embedding,
@@ -450,6 +461,8 @@ class PineconeManager:
             filter=filter,
             include_metadata=True
         )
+        
+        logger.info(f"Pinecone returned {len(results)} results")
 
         return results
 

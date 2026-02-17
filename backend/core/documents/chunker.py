@@ -145,6 +145,17 @@ class DocumentChunker:
 
             # Clean chunk text
             clean_text = self._clean_chunk_text(chunk_text)
+            
+            # Skip if cleaning resulted in empty text (strict check)
+            if not clean_text:
+                logger.debug(f"Skipping empty chunk {idx} (after type check)")
+                continue
+            if len(clean_text.strip()) == 0:
+                logger.debug(f"Skipping whitespace-only chunk {idx}")
+                continue
+            if len(clean_text.split()) == 0:  # No words
+                logger.debug(f"Skipping wordless chunk {idx}")
+                continue
 
             # Detect content types
             has_equations = self._has_equations(clean_text)

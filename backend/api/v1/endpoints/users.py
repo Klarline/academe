@@ -158,13 +158,25 @@ async def get_user_stats(
     user_documents = doc_manager.get_user_documents(current_user_id)
     documents_uploaded = len(user_documents)
     
-    # Get progress stats
+    # Get progress stats (simplified - return what we have)
     try:
-        progress_data = progress_repo.get_user_progress_summary(current_user_id)
-        concepts_studied = progress_data.get("total_concepts", 0)
-        study_streak_days = progress_data.get("streak_days", 0)
-        total_study_time_hours = progress_data.get("total_hours", 0.0)
-    except:
+        user_progress = progress_repo.get_user_progress(current_user_id)
+        concepts_studied = len(user_progress) if user_progress else 0
+        
+        # Calculate total study time from progress
+        if user_progress:
+            total_minutes = sum(
+                getattr(p, 'total_study_time_minutes', 0) 
+                for p in user_progress
+            )
+            total_study_time_hours = round(total_minutes / 60.0, 1)
+        else:
+            total_study_time_hours = 0.0
+        
+        # Simplified streak - just check if any recent activity
+        study_streak_days = 1 if user_progress else 0
+    except Exception as e:
+        logger.warning(f"Could not get progress stats: {e}")
         concepts_studied = 0
         study_streak_days = 0
         total_study_time_hours = 0.0

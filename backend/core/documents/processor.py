@@ -129,6 +129,16 @@ class PDFProcessor:
         Returns:
             Cleaned text
         """
+        # IMPORTANT: Preserve page markers before cleaning
+        # Extract and temporarily remove page markers
+        page_markers = {}
+        def save_marker(match):
+            marker_id = f"___PAGE_MARKER_{len(page_markers)}___"
+            page_markers[marker_id] = match.group(0)
+            return marker_id
+        
+        text = re.sub(r'\[PAGE \d+\]', save_marker, text)
+        
         # Remove excessive whitespace
         text = re.sub(r'\s+', ' ', text)
 
@@ -145,8 +155,9 @@ class PDFProcessor:
         # Fix hyphenation at line breaks
         text = re.sub(r'(\w+)-\s*\n\s*(\w+)', r'\1\2', text)
 
-        # Normalize page markers
-        text = re.sub(r'\[PAGE\s+(\d+)\]', r'\n\n[PAGE \1]\n', text)
+        # Restore page markers
+        for marker_id, original_marker in page_markers.items():
+            text = text.replace(marker_id, f'\n\n{original_marker}\n\n')
 
         return text.strip()
 

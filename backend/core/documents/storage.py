@@ -32,8 +32,10 @@ class DocumentStorage:
             # Get backend directory
             backend_dir = Path(__file__).parent.parent.parent
             self.storage_path = (backend_dir / storage_path).resolve()
+            logger.info(f"Resolved storage path from {storage_path} via __file__: {self.storage_path}")
         else:
             self.storage_path = Path(storage_path)
+            logger.info(f"Using direct storage path: {self.storage_path}")
         
         self.storage_path.mkdir(parents=True, exist_ok=True)
         
@@ -195,7 +197,7 @@ class DocumentRepository:
 
             query = {"user_id": user_id}
             if not include_deleted:
-                query["processing_status"] = {"$ne": DocumentStatus.DELETED}
+                query["processing_status"] = {"$ne": "deleted"}  # String value, not enum
 
             cursor = collection.find(query).sort("uploaded_at", -1)
 
@@ -258,7 +260,7 @@ class DocumentRepository:
         return self.update_document(
             document_id,
             {
-                "processing_status": DocumentStatus.DELETED,
+                "processing_status": "deleted",  # String value for MongoDB
                 "is_active": False
             }
         )

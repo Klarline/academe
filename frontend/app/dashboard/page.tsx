@@ -118,7 +118,7 @@ export default function DashboardPage() {
           <h2 className="text-xl font-bold mb-4" style={{ color: COLORS.dark }}>
             Quick Actions
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <a
               href="/chat"
               className="p-6 border-2 border-slate-100 rounded-xl hover:border-[#5A7863] transition-all group bg-white"
@@ -127,6 +127,16 @@ export default function DashboardPage() {
                 Start New Chat
               </div>
               <p className="text-sm text-slate-500 mt-1">Ask questions and get explanations</p>
+            </a>
+            
+            <a
+              href="/research"
+              className="p-6 border-2 border-slate-100 rounded-xl hover:border-[#5A7863] transition-all group bg-white"
+            >
+              <div className="font-semibold text-slate-800 group-hover:text-[#5A7863] transition-colors">
+                Research Documents
+              </div>
+              <p className="text-sm text-slate-500 mt-1">Get answers with citations from your materials</p>
             </a>
             
             <a

@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
     
+    # Pinecone Configuration (Optional - uses mock if not provided)
+    pinecone_api_key: str | None = None
+    pinecone_environment: str | None = None
+    pinecone_index_name: str = "academe"
+    
     # App Settings
     log_level: str = "INFO"
 

@@ -63,14 +63,21 @@ class SemanticSearchService:
             # Prepare chunk data for indexing
             chunk_data = []
             for i, chunk in enumerate(chunks):
-                chunk_data.append({
+                # Build metadata, filtering out None values (Pinecone doesn't accept null)
+                metadata = {
                     "chunk_index": chunk.chunk_index,
                     "content": chunk.content,
-                    "page_number": chunk.page_number,
-                    "section_title": chunk.section_title,
                     "has_code": chunk.has_code,
                     "has_equations": chunk.has_equations
-                })
+                }
+                
+                # Add optional fields only if they have values
+                if chunk.page_number is not None:
+                    metadata["page_number"] = chunk.page_number
+                if chunk.section_title is not None:
+                    metadata["section_title"] = chunk.section_title
+                
+                chunk_data.append(metadata)
 
             # Index in Pinecone
             logger.info("Indexing in vector database...")
@@ -116,7 +123,7 @@ class SemanticSearchService:
         filter_document_id: Optional[str] = None,
         filter_has_code: Optional[bool] = None,
         filter_has_equations: Optional[bool] = None,
-        score_threshold: float = 0.5
+        score_threshold: float = 0.2  # Lowered from 0.5 for better recall
     ) -> List[DocumentSearchResult]:
         """
         Perform semantic search over user's documents.
@@ -156,8 +163,14 @@ class SemanticSearchService:
 
             # Convert to DocumentSearchResult objects
             search_results = []
+            
+            logger.info(f"Processing {len(pinecone_results)} Pinecone results")
+            
             for i, result in enumerate(pinecone_results):
-                if result["score"] < score_threshold:
+                logger.info(f"Result {i}: id={result.get('id')}, score={result.get('score')}")
+                
+                if result.get("score", 0) < score_threshold:
+                    logger.debug(f"Skipping result {i}: score {result.get('score')} below threshold {score_threshold}")
                     continue
 
                 # Parse chunk ID to get document and chunk index

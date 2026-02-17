@@ -9,6 +9,7 @@ Handles:
 """
 
 from celery import Celery
+from celery.signals import worker_ready
 from kombu import Exchange, Queue
 import os
 
@@ -39,9 +40,10 @@ celery_app.conf.update(
     
     # Task routing (priority queues)
     task_routes={
-        'core.tasks.update_memory_task': {'queue': 'memory'},
-        'core.tasks.process_document_task': {'queue': 'documents'},
-        'core.tasks.update_progress_task': {'queue': 'memory'},
+        'academe.update_memory': {'queue': 'memory'},
+        'academe.process_document': {'queue': 'documents'},
+        'academe.update_progress': {'queue': 'memory'},
+        'academe.index_document': {'queue': 'documents'},
     },
     
     # Queue definitions
@@ -59,3 +61,13 @@ celery_app.conf.update(
 
 # Task autodiscovery
 celery_app.autodiscover_tasks(['core'])
+
+
+# Initialize database when worker starts
+@worker_ready.connect
+def init_worker_database(sender=None, **kwargs):
+    """Initialize database connection when Celery worker starts."""
+    from core.database import init_database
+    init_database()
+    print("Database initialized for Celery worker")
+
