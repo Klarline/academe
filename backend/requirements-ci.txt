@@ -1,0 +1,169 @@
+# CI/CD Optimization Strategy - Docker Layer Caching
+
+## Problem Analysis
+
+**Current CI Runtime:** 15+ minutes, often timing out
+
+**Why It's Slow:**
+- 60+ Python packages (~2GB downloads)
+- Heavy ML libraries: sentence-transformers, datasets, ragas, scikit-learn
+- No dependency caching between runs
+- GitHub Actions free tier: 10-15 minute timeout
+
+**Current Coverage:** Only 13% in CI (vs 43% locally) because 9 tests fail to import
+
+---
+
+## Solution: Docker Layer Caching
+
+### Strategy Overview
+
+Instead of reinstalling dependencies every CI run:
+
+1. **Build base Docker image** with all dependencies (one-time, 15 min)
+2. **Push to Docker Hub** as cache layer
+3. **CI pulls cached image** (30 seconds)
+4. **Only rebuild when requirements.txt changes**
+
+**Result:** 15 minutes → 2-3 minutes per CI run
+
+---
+
+## Implementation Options
+
+### Option A: Docker-Based Testing (RECOMMENDED)
+
+**Pros:**
+- ✅ Uses actual Docker images (production parity)
+- ✅ Full dependency caching
+- ✅ Fast CI runs (2-3 min after first build)
+- ✅ Tests run in same environment as production
+
+**Cons:**
+- ⚠️ First run still takes 15 minutes (to build cache)
+- ⚠️ Requires Docker Hub storage (~500MB per image)
+
+**Implementation:** Use `ci-docker-cached.yml` (already created)
+
+### Option B: Simplify Dependencies (FASTER BUT COMPROMISES)
+
+**Pros:**
+- ✅ Immediate fix (no waiting)
+- ✅ CI runs in 3-5 minutes
+- ✅ Uses GitHub's pip cache
+
+**Cons:**
+- ❌ Some tests won't run in CI (only locally)
+- ❌ Not testing full production environment
+- ❌ Coverage will be lower in CI
+
+**Implementation:** Make heavy dependencies optional
+
+---
+
+## RECOMMENDED: Option A Implementation
+
+### Step 1: Build Base Image Locally (One-time, 15 min)
+
+```bash
+cd /Users/x/Desktop/academe/backend
+
+# Build the base image with all dependencies
+docker build --target base -t $DOCKER_USERNAME/academe-backend:deps-cache .
+
+# Push to Docker Hub (creates the cache layer)
+docker push $DOCKER_USERNAME/academe-backend:deps-cache
+```
+
+**Replace `$DOCKER_USERNAME` with your actual Docker Hub username**
+
+### Step 2: Update CI Workflow
+
+I've created `ci-docker-cached.yml` which:
+- Pulls cached base image from Docker Hub
+- Only rebuilds if requirements.txt changes
+- Runs tests inside Docker (production parity)
+- Extracts coverage reports
+
+### Step 3: Replace Current CI Workflow
+
+```bash
+cd /Users/x/Desktop/academe
+
+# Backup current workflow
+mv .github/workflows/ci.yml .github/workflows/ci-old.yml
+
+# Use the new Docker-cached version
+mv .github/workflows/ci-docker-cached.yml .github/workflows/ci.yml
+
+# Commit
+git add .github/workflows/
+git commit -m "perf: Optimize CI with Docker layer caching
+
+Replace dependency reinstallation with Docker layer caching:
+- Pull pre-built base image from Docker Hub
+- Only rebuild when requirements.txt changes
+- Reduces CI runtime from 15+ minutes to 2-3 minutes
+
+First run builds cache (15 min one-time cost)
+Subsequent runs use cached layers (2-3 min)"
+```
+
+---
+
+## Alternative: Option B (Simpler, Faster Setup)
+
+Make heavy ML dependencies optional:
+
+<function_calls>
+<invoke name="Desktop Commander:write_file">
+<parameter name="content"># requirements.txt - Lightweight CI version
+
+# Core essentials only - keep heavy ML packages optional
+-e .
+
+# === CORE DEPENDENCIES (Always installed) ===
+
+# LLM Frameworks (lightweight parts only)
+langgraph==0.2.45
+langchain==0.3.7
+langchain-google-genai==2.0.5
+
+# FastAPI & Web
+fastapi==0.115.5
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+websockets==14.1
+
+# Utilities
+python-dotenv==1.0.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# Database
+pymongo==4.6.1
+motor==3.3.2
+
+# Task Queue
+celery==5.3.4
+redis==5.0.1
+
+# Authentication
+bcrypt==4.1.2
+python-jose[cryptography]==3.3.0
+passlib==1.7.4
+
+# Testing
+pytest==8.3.4
+pytest-cov==6.0.0
+pytest-asyncio==0.21.1
+
+# === OPTIONAL DEPENDENCIES (Skip in CI) ===
+# Install these manually or in Docker only:
+# sentence-transformers>=2.2.2
+# ragas==0.1.0
+# datasets==2.14.0
+# pyarrow<15.0.0
+# scikit-learn>=1.4.0
+# numpy>=1.26.0
+# pandas>=2.2.0

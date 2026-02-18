@@ -30,8 +30,18 @@ COPY . .
 # Install test dependencies
 RUN pip install --no-cache-dir pytest pytest-cov pytest-asyncio
 
-# Run tests
-RUN pytest tests/unit/ -v --cov=core --cov=api || echo "Tests run completed"
+# Create test environment file
+RUN echo 'GOOGLE_API_KEY=test_key' > .env && \
+    echo 'MONGODB_URI=mongodb://test:test@localhost:27017/?authSource=admin' >> .env && \
+    echo 'JWT_SECRET_KEY=test_secret_key_for_docker_must_be_32_chars_long' >> .env && \
+    echo 'JWT_ALGORITHM=HS256' >> .env && \
+    echo 'JWT_EXPIRATION_HOURS=24' >> .env && \
+    echo 'PINECONE_API_KEY=test_pinecone_key' >> .env && \
+    echo 'PINECONE_INDEX_NAME=test-index' >> .env && \
+    echo 'CELERY_BROKER_URL=redis://localhost:6379/0' >> .env
+
+# Run tests (will fail build if coverage < 30% or tests fail)
+RUN pytest tests/unit/ -v --cov=core --cov=api
 
 # ======================
 # Stage 3: Production

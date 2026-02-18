@@ -50,8 +50,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/academe-${{ matrix.service }}:buildcache
-          cache-to: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/academe-${{ matrix.service }}:buildcache,mode=max
+          cache-from: |
+            type=registry,ref=claire428/academe-${{ matrix.service }}:deps-cache
+            type=registry,ref=claire428/academe-${{ matrix.service }}:buildcache
+          cache-to: type=registry,ref=claire428/academe-${{ matrix.service }}:buildcache,mode=max
           target: production
 
       - name: Image digest

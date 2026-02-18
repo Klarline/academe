@@ -1,0 +1,154 @@
+name: CI Pipeline - Docker Cache Optimized
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  # ======================
+  # FAST PATH: Use Docker with layer caching
+  # ======================
+  test-backend-docker:
+    name: Backend Tests (Docker Cached)
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to Docker Hub (for cache)
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and test using Docker
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          target: test
+          push: false
+          cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/academe-backend:buildcache
+          cache-to: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/academe-backend:buildcache,mode=max
+          build-args: |
+            GOOGLE_API_KEY=test_key
+            MONGODB_URI=mongodb://test:test@mongodb:27017/?authSource=admin
+
+      - name: Extract coverage from Docker
+        run: |
+          # Run container to extract coverage reports
+          docker create --name test-container $(docker images -q | head -1)
+          docker cp test-container:/app/coverage.xml ./coverage.xml || true
+          docker cp test-container:/app/htmlcov ./htmlcov || true
+          docker rm test-container
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        if: always()
+        with:
+          file: ./coverage.xml
+          flags: backend
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  test-frontend:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Run lint
+        run: |
+          cd frontend
+          npm run lint
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build
+  
+  lint:
+    name: Code Quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install linting tools
+        run: |
+          pip install flake8 black isort
+
+      - name: Run Black (code formatting check)
+        run: |
+          cd backend
+          black --check . || echo "Code formatting issues found"
+
+      - name: Run isort (import sorting check)
+        run: |
+          cd backend
+          isort --check-only . || echo "Import sorting issues found"
+
+      - name: Run flake8 (linting)
+        run: |
+          cd backend
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install safety and bandit
+        run: pip install safety bandit
+
+      - name: Check for known security vulnerabilities
+        run: |
+          cd backend
+          safety check --json || true
+
+      - name: Run Bandit (security linting)
+        run: |
+          cd backend
+          bandit -r core/ api/ -f json -o bandit-report.json || true
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-reports
+          path: backend/bandit-report.json
