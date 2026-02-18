@@ -49,6 +49,7 @@ jsonschema==4.19.0
 # Evaluation Framework
 ragas==0.1.0
 datasets==2.14.0
+pyarrow<15.0.0  # Pin to version compatible with datasets 2.14.0
 
 # Monitoring & Metrics
 prometheus-client==0.19.0

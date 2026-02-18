@@ -41,7 +41,8 @@ FROM base AS production
 # Copy only application code from test stage
 COPY --from=test /app /app
 
-# Create non-root user for securityRUN useradd -m -u 1000 academe && \
+# Create non-root user for security
+RUN useradd -m -u 1000 academe && \
     chown -R academe:academe /app
 
 # Switch to non-root user

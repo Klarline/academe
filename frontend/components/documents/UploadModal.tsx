@@ -59,7 +59,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
         setSelectedFile(files[0]);
       }
     }
-  }, []);
+  }, [validateFile]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;

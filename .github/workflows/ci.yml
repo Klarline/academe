@@ -65,12 +65,12 @@ jobs:
           cat > .env << 'EOF'
           GOOGLE_API_KEY=test_key
           MONGODB_URI=mongodb://test:test@localhost:27017/?authSource=admin
-          REDIS_URL=redis://localhost:6379/0
-          JWT_SECRET=test_secret_key_for_ci
+          JWT_SECRET_KEY=test_secret_key_for_ci_must_be_at_least_32_characters_long
           JWT_ALGORITHM=HS256
-          ACCESS_TOKEN_EXPIRE_MINUTES=30
+          JWT_EXPIRATION_HOURS=24
           PINECONE_API_KEY=test_pinecone_key
           PINECONE_INDEX_NAME=test-index
+          CELERY_BROKER_URL=redis://localhost:6379/0
           EOF
 
       - name: Run unit tests with coverage
