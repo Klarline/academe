@@ -1,12 +1,11 @@
 name: Build and Push Docker Images
 
-# Temporarily disabled - add DOCKER_USERNAME and DOCKER_PASSWORD secrets to enable
 on:
-  workflow_dispatch:  # Manual trigger only
-  # push:
-  #   branches: [ main ]
-  #   tags:
-  #     - 'v*'
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   build-and-push:
