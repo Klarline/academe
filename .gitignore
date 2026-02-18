@@ -35,7 +35,12 @@ ragas_results.json
 # Testing
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+coverage.xml
+*.coverage
+test_output.txt
+.tox/
 
 # Distribution
 dist/
