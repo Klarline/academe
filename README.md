@@ -4,6 +4,7 @@ A production-grade, full-stack AI application that transforms how students inter
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688)](https://fastapi.tiangolo.com/)
+![LangChain](https://img.shields.io/badge/LangChain-0.3-blue)
 [![Next.js](https://img.shields.io/badge/Next.js-14-black)](https://nextjs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -72,7 +73,7 @@ Specialized AI agents handle different tasks:
 
 - **Real-Time Streaming**: WebSocket support for token-by-token responses
 - **Async Processing**: Celery background workers for document indexing
-- **Health Monitoring**: Prometheus metrics and automated health checks
+- **Observability Stack**: Prometheus + Grafana for metrics and visualization
 - **Auto-Scaling Ready**: Docker Compose orchestration with configurable workers
 
 ---
@@ -193,7 +194,7 @@ For detailed architecture, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | **Containerization** | Docker + Docker Compose | Service orchestration |
 | **CI/CD** | GitHub Actions | Automated testing and deployment |
 | **Hosting** | AWS EC2  + Vercel | Backend and frontend hosting |
-| **Monitoring** | Prometheus | Metrics collection and health checks |
+| **Monitoring** | Prometheus + Grafana | Metrics collection and visualization |
 | **Reverse Proxy** | Nginx | Load balancing and routing |
 
 ---
@@ -258,7 +259,7 @@ npm run dev
 # Navigate to docker directory
 cd infrastructure/docker
 
-# Start all services
+# Start all services (including monitoring)
 docker-compose up -d
 
 # Check status
@@ -268,9 +269,14 @@ docker-compose ps
 docker-compose logs -f backend
 ```
 
-# View logs
-docker-compose logs -f backend
+**Access Points:**
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:8000
+- API Docs: http://localhost:8000/docs
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3001 (admin/academe123)
 
+```bash
 # Stop all services
 docker-compose down
 ```
