@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
     
+    # Embedding Configuration
+    embedding_provider: str | None = None  # gemini, sentence-transformers, openai (auto-detect if None)
+    embedding_model: str | None = None  # Auto-detected from provider if None
+    embedding_dim: int = 768  # Gemini supports Matryoshka: 256, 768, 1536, 3072
+
     # Pinecone Configuration (Optional - uses mock if not provided)
     pinecone_api_key: str | None = None
     pinecone_environment: str | None = None

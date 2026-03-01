@@ -69,6 +69,8 @@ Specialized AI agents handle different tasks:
 - **Multi-Query Expansion**: 3 alternative phrasings per query for broader recall
 - **Semantic Response Cache**: Similar past queries return cached answers instantly (~1ms vs ~1s)
 - **Retrieval Feedback Loop**: Thumbs up/down tracking identifies weak queries and documents
+- **Proposition-Based Indexing**: Chunks decomposed into atomic factual statements for precise retrieval
+- **Knowledge Graph**: Entity-relationship extraction with multi-hop graph traversal across documents
 - **Document Mode**: Answers drawn from uploaded materials with source citations
 - **Knowledge Mode**: Falls back to LLM general knowledge when documents don't cover the topic
 
@@ -183,7 +185,7 @@ For detailed architecture, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | **Vector Database** | Pinecone | Semantic search and embeddings |
 | **Database** | MongoDB 7.0 | User data, conversations, documents |
 | **Cache/Queue** | Redis 7 + Celery 5.3 | Task queue and caching |
-| **Embeddings** | Sentence-Transformers | Document vectorization |
+| **Embeddings** | Gemini embedding-001 (free tier) | Document vectorization (768d, Matryoshka) |
 | **LLM Provider** | Google Gemini 2.0 Flash | Primary language model |
 
 ### Frontend Stack
@@ -423,8 +425,10 @@ class AgentState(TypedDict):
 1. **Upload** → PDF/TXT/MD parsing with PyPDF2
 2. **Type Detection** → Auto-classify as textbook, paper, notes, or code from content signals
 3. **Adaptive Chunking** → Per-type chunk size (textbook 1200, paper 800, notes 600) with optional parent-child split
-4. **Contextual Embedding** → Prepend document title + section before embedding with Sentence-Transformers (all-MiniLM-L6-v2)
-5. **Storage** → Pinecone vector database with chunk metadata
+4. **Contextual Embedding** → Prepend document title + section before embedding with Gemini embedding-001 (768 dims, free tier)
+5. **Proposition Extraction** → Decompose chunks into atomic factual statements for fine-grained retrieval
+6. **Knowledge Graph Extraction** → Extract entity-relationship triples (subject → predicate → object) from chunks
+7. **Storage** → Pinecone vector database with chunk metadata; propositions and KG triples in MongoDB
 
 **Retrieval** (12-step pipeline):
 1. **Cache Check** → Return cached answer if semantically similar query exists (cosine > 0.95)
@@ -436,9 +440,10 @@ class AgentState(TypedDict):
 7. **Cross-Encoder Reranking** → ms-marco-MiniLM-L-6-v2 re-scores top-20 → top-5
 8. **Self-RAG Verification** → LLM judges context sufficiency; reformulates + retries if insufficient
 9. **Context Expansion** → Sliding window (±1 neighbor chunks) or parent-child expansion
+10. **Knowledge Graph Augmentation** → Multi-hop graph traversal adds related facts to LLM context
 
 **Generation**:
-1. **Prompt Engineering** → Include expanded context + system instructions
+1. **Prompt Engineering** → Include expanded context + KG relationships + system instructions
 2. **LLM Inference** → Google Gemini 2.0 Flash (user-facing), OpenAI gpt-4o-mini (infrastructure)
 3. **Streaming** → Token-by-token response via WebSocket
 4. **Citation Extraction** → Parse and format source references
@@ -455,9 +460,11 @@ class AgentState(TypedDict):
 - `progress`: Concept mastery tracking per user
 - `rag_metrics`: Retrieval performance metrics over time
 - `retrieval_feedback`: User thumbs up/down on RAG answers
+- `propositions`: Atomic factual statements with source chunk back-references
+- `knowledge_graph`: Entity-relationship triples for multi-hop reasoning
 
 **Pinecone Index**:
-- Dimensions: 384 (sentence-transformers model output)
+- Dimensions: 768 (Gemini embedding-001 with Matryoshka truncation)
 - Metric: Cosine similarity
 - Metadata: document_id, page_number, chunk_text, source
 
@@ -504,9 +511,22 @@ class AgentState(TypedDict):
 - Semantic response cache: cosine similarity lookup (threshold 0.95), TTL-based expiry, auto-invalidation on document changes
 - Retrieval feedback loop: thumbs up/down stored in MongoDB; identifies weak documents and tracks satisfaction rate
 
+**Proposition-Based Indexing**:
+- Chunks decomposed into atomic factual statements using LLM (gpt-4o-mini)
+- Each proposition is self-contained and de-contextualized (pronouns resolved)
+- Back-references to source chunk for context expansion at generation time
+- Sentence-level fallback when LLM is unavailable
+
+**Knowledge Graph**:
+- Entity-relationship triples extracted from chunks (subject → predicate → object)
+- In-memory BFS traversal from query entities for multi-hop reasoning
+- Graph context appended to LLM prompt alongside retrieved chunks
+- Enables questions that span multiple documents and concepts
+
 **Context Expansion**:
 - Sliding window: retrieves ±1 adjacent chunks from the same document
 - Parent-child: retrieves small children, expands to full parent text for LLM context
+- Knowledge graph: multi-hop traversal adds structured relationships to context
 - Deduplication across overlapping windows
 
 **Evaluation Framework**:
@@ -560,7 +580,7 @@ academe/
 │   │   ├── celery_config.py   # Task queue configuration
 │   │   └── tasks.py           # Background job definitions
 │   ├── tests/                 # Comprehensive test suite
-│   │   ├── unit/              # 275+ unit tests
+│   │   ├── unit/              # 313+ unit tests
 │   │   │   ├── agents/        # Agent behavior tests
 │   │   │   ├── test_auth_service.py
 │   │   │   ├── test_chunking_features.py  # Adaptive chunking, parent-child, context
@@ -568,6 +588,7 @@ academe/
 │   │   │   ├── test_documents.py
 │   │   │   ├── test_graph.py
 │   │   │   ├── test_rag_advanced.py       # Self-RAG, cache, decomposition, feedback
+│   │   │   ├── test_propositions_and_kg.py  # Proposition indexing, knowledge graph
 │   │   │   └── test_vectors.py
 │   │   └── evaluation/        # RAG evaluation suite
 │   │       ├── test_retrieval_evaluator.py
@@ -708,11 +729,7 @@ NEXT_PUBLIC_WS_URL=ws://localhost:8000          # WebSocket URL
 
 ### Guides
 
-- **[RAG Architecture](docs/RAG_ARCHITECTURE.md)** - Retrieval pipeline: hybrid search, adaptive chunking, contextual embeddings, sliding window
-- **[Design Decisions](docs/DESIGN_DECISIONS.md)** - 14 key decisions with reasoning, trade-offs, and alternatives
-- **[Evaluation Results](docs/EVALUATION_RESULTS.md)** - Metrics framework and 6-phase measurement guide
-- **[Scaling Considerations](docs/SCALING_CONSIDERATIONS.md)** - Growth plan with migration triggers
-- **[Chunking Strategy](docs/chunking_strategy.md)** - Per-document-type chunking rationale and experiments
+- **[RAG Architecture](docs/RAG_ARCHITECTURE.md)** - Retrieval pipeline: hybrid search, adaptive chunking, contextual embeddings, knowledge graph, proposition indexing
 - **[Deployment Guide](docs/DEPLOYMENT.md)** - Complete deployment instructions for AWS, MongoDB Atlas, and Vercel
 - **[Architecture Documentation](docs/ARCHITECTURE.md)** - System design, technical decisions, and data flow
 - **[Terraform README](infrastructure/terraform/README.md)** - Infrastructure as Code deployment guide

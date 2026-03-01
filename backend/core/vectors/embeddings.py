@@ -1,4 +1,11 @@
-"""Embedding generation service for Academe."""
+"""Embedding generation service for Academe.
+
+Supports multiple providers:
+    - gemini (default): Google Gemini embedding-001 via free tier API
+    - sentence-transformers: Local all-MiniLM-L6-v2 (offline fallback)
+    - openai: OpenAI text-embedding-3-small
+    - mock: Deterministic random vectors for testing
+"""
 
 import logging
 import threading
@@ -13,6 +20,12 @@ except ImportError:
     SENTENCE_TRANSFORMERS_AVAILABLE = False
 
 try:
+    import google.generativeai as genai
+    GOOGLE_GENAI_AVAILABLE = True
+except ImportError:
+    GOOGLE_GENAI_AVAILABLE = False
+
+try:
     import openai
     OPENAI_AVAILABLE = True
 except ImportError:
@@ -22,37 +35,90 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+PROVIDER_DEFAULTS = {
+    "gemini": ("gemini-embedding-001", 768),
+    "sentence-transformers": ("all-MiniLM-L6-v2", 384),
+    "openai": ("text-embedding-3-small", 1536),
+    "mock": ("mock", 768),
+}
+
 
 class EmbeddingService:
     """Service for generating text embeddings."""
 
     def __init__(
         self,
-        model_name: str = "all-MiniLM-L6-v2",
-        provider: str = "sentence-transformers",
-        cache_embeddings: bool = True
+        model_name: Optional[str] = None,
+        provider: Optional[str] = None,
+        cache_embeddings: bool = True,
+        embedding_dim: Optional[int] = None,
     ):
         """
         Initialize embedding service.
 
         Args:
-            model_name: Name of the embedding model
-            provider: Provider to use (sentence-transformers, openai, custom)
+            model_name: Name of the embedding model (auto-detected from provider if None)
+            provider: Provider to use (gemini, sentence-transformers, openai, mock).
+                      Defaults to gemini if GOOGLE_API_KEY is set, else sentence-transformers.
             cache_embeddings: Whether to cache embeddings
+            embedding_dim: Override output dimensions (Gemini supports Matryoshka truncation)
         """
-        self.model_name = model_name
+        if provider is None:
+            provider = self._auto_detect_provider()
         self.provider = provider
+
+        default_model, default_dim = PROVIDER_DEFAULTS.get(
+            provider, PROVIDER_DEFAULTS["mock"]
+        )
+        self.model_name = model_name or default_model
+        self.embedding_dim = embedding_dim or default_dim
         self.cache_embeddings = cache_embeddings
         self.cache = {} if cache_embeddings else None
         self._cache_lock = threading.Lock()
 
-        # Initialize model based on provider
         self.model = None
         self._init_model()
 
+    @staticmethod
+    def _auto_detect_provider() -> str:
+        """Choose the best available provider based on settings, packages, and API keys."""
+        try:
+            from core.config.settings import get_settings
+            settings = get_settings()
+            if settings.embedding_provider:
+                return settings.embedding_provider
+            if settings.google_api_key and GOOGLE_GENAI_AVAILABLE:
+                return "gemini"
+        except Exception:
+            pass
+
+        if SENTENCE_TRANSFORMERS_AVAILABLE:
+            return "sentence-transformers"
+
+        return "mock"
+
     def _init_model(self):
         """Initialize the embedding model."""
-        if self.provider == "sentence-transformers":
+        if self.provider == "gemini":
+            if not GOOGLE_GENAI_AVAILABLE:
+                logger.warning("google-generativeai not installed, falling back")
+                self._fallback_init()
+                return
+            try:
+                from core.config.settings import get_settings
+                settings = get_settings()
+                if not settings.google_api_key:
+                    raise ValueError("GOOGLE_API_KEY not set")
+                genai.configure(api_key=settings.google_api_key)
+                logger.info(
+                    f"Using Gemini embeddings: {self.model_name}, "
+                    f"dim={self.embedding_dim}"
+                )
+            except Exception as e:
+                logger.warning(f"Gemini embedding init failed: {e}, falling back")
+                self._fallback_init()
+
+        elif self.provider == "sentence-transformers":
             if not SENTENCE_TRANSFORMERS_AVAILABLE:
                 logger.warning("sentence-transformers not installed, using mock embeddings")
                 self.provider = "mock"
@@ -71,15 +137,26 @@ class EmbeddingService:
                 logger.warning("OpenAI not installed, using mock embeddings")
                 self.provider = "mock"
                 return
-
-            # For OpenAI, we'll use their API
-            self.embedding_dim = 1536  # OpenAI ada-002 dimension
-            logger.info("Using OpenAI embeddings")
+            logger.info(f"Using OpenAI embeddings: {self.model_name}, dim={self.embedding_dim}")
 
         elif self.provider == "mock":
-            # Mock provider for testing
-            self.embedding_dim = 384
-            logger.info("Using mock embeddings for testing")
+            logger.info(f"Using mock embeddings for testing (dim={self.embedding_dim})")
+
+    def _fallback_init(self):
+        """Fall back to sentence-transformers, then mock."""
+        if SENTENCE_TRANSFORMERS_AVAILABLE:
+            self.provider = "sentence-transformers"
+            self.model_name = "all-MiniLM-L6-v2"
+            try:
+                self.model = SentenceTransformer(self.model_name)
+                self.embedding_dim = self.model.get_sentence_embedding_dimension()
+                logger.info(f"Fallback to {self.model_name} ({self.embedding_dim} dims)")
+                return
+            except Exception:
+                pass
+        self.provider = "mock"
+        self.embedding_dim = PROVIDER_DEFAULTS["mock"][1]
+        logger.info("Fallback to mock embeddings")
 
     def generate_embedding(self, text: str) -> List[float]:
         """
@@ -103,7 +180,9 @@ class EmbeddingService:
                 return self.cache[cache_key]
 
             # Generate embedding based on provider (under lock for thread-safe model/API use)
-            if self.provider == "sentence-transformers":
+            if self.provider == "gemini":
+                embedding = self._generate_gemini_embedding(text)
+            elif self.provider == "sentence-transformers":
                 embedding = self._generate_st_embedding(text)
             elif self.provider == "openai":
                 embedding = self._generate_openai_embedding(text)
@@ -133,27 +212,51 @@ class EmbeddingService:
         """
         embeddings = []
 
-        if self.provider == "sentence-transformers" and self.model:
-            # Sentence transformers can handle batch processing
+        if self.provider == "gemini":
             try:
-                # Process in batches
+                for i in range(0, len(texts), batch_size):
+                    batch = texts[i:i + batch_size]
+                    result = genai.embed_content(
+                        model=f"models/{self.model_name}",
+                        content=batch,
+                        output_dimensionality=self.embedding_dim,
+                    )
+                    embeddings.extend(result["embedding"])
+                logger.info(f"Generated {len(embeddings)} Gemini embeddings in batch")
+            except Exception as e:
+                logger.error(f"Gemini batch embedding failed: {e}")
+                for text in texts:
+                    embeddings.append(self.generate_embedding(text))
+
+        elif self.provider == "sentence-transformers" and self.model:
+            try:
                 for i in range(0, len(texts), batch_size):
                     batch = texts[i:i + batch_size]
                     batch_embeddings = self.model.encode(batch, convert_to_numpy=True)
                     embeddings.extend(batch_embeddings.tolist())
-
                 logger.info(f"Generated {len(embeddings)} embeddings in batch")
             except Exception as e:
                 logger.error(f"Batch embedding failed: {e}")
-                # Fall back to individual processing
                 for text in texts:
                     embeddings.append(self.generate_embedding(text))
         else:
-            # Process individually for other providers
             for text in texts:
                 embeddings.append(self.generate_embedding(text))
 
         return embeddings
+
+    def _generate_gemini_embedding(self, text: str) -> List[float]:
+        """Generate embedding using Gemini API (free tier)."""
+        try:
+            result = genai.embed_content(
+                model=f"models/{self.model_name}",
+                content=text,
+                output_dimensionality=self.embedding_dim,
+            )
+            return result["embedding"]
+        except Exception as e:
+            logger.error(f"Gemini embedding failed: {e}")
+            return self._get_zero_vector()
 
     def _generate_st_embedding(self, text: str) -> List[float]:
         """Generate embedding using sentence-transformers."""
@@ -165,25 +268,25 @@ class EmbeddingService:
             return self._get_zero_vector()
 
     def _generate_openai_embedding(self, text: str) -> List[float]:
-        """Generate embedding using OpenAI API."""
+        """Generate embedding using OpenAI API (v1.0+ SDK)."""
         try:
-            import openai
+            from openai import OpenAI
             from core.config.settings import get_settings
 
             settings = get_settings()
-            openai.api_key = settings.openai_api_key
+            client = OpenAI(api_key=settings.openai_api_key)
 
-            response = openai.Embedding.create(
+            response = client.embeddings.create(
                 input=text,
-                model="text-embedding-ada-002"
+                model=self.model_name,
             )
-            return response['data'][0]['embedding']
+            return response.data[0].embedding
         except Exception as e:
             logger.error(f"OpenAI embedding failed: {e}")
             return self._get_zero_vector()
 
     def _generate_mock_embedding(self, text: str) -> List[float]:
-        """Generate mock embedding for testing (thread-safe, deterministic per text)."""
+        """Generate deterministic mock embedding for testing (thread-safe)."""
         seed = hash(text) & (2**32 - 1)
         rng = np.random.default_rng(seed)
         embedding = rng.standard_normal(self.embedding_dim)
@@ -292,8 +395,8 @@ class HybridEmbeddingService(EmbeddingService):
         self.services = []
         for model_config in models:
             service = EmbeddingService(
-                model_name=model_config.get("model_name", "all-MiniLM-L6-v2"),
-                provider=model_config.get("provider", "sentence-transformers")
+                model_name=model_config.get("model_name"),
+                provider=model_config.get("provider"),
             )
             self.services.append(service)
 
@@ -308,7 +411,6 @@ class HybridEmbeddingService(EmbeddingService):
 
         for service, weight in zip(self.services, self.weights):
             embedding = service.generate_embedding(text)
-            # Apply weight
             weighted_embedding = [e * weight for e in embedding]
             embeddings.extend(weighted_embedding)
 
@@ -319,6 +421,11 @@ def create_embedding_service(config: Optional[Dict[str, Any]] = None) -> Embeddi
     """
     Factory function to create embedding service.
 
+    Provider priority (when not specified):
+        1. gemini — if GOOGLE_API_KEY is set (free tier, best quality)
+        2. sentence-transformers — local, no API key needed
+        3. mock — deterministic random vectors
+
     Args:
         config: Configuration dictionary
 
@@ -328,27 +435,23 @@ def create_embedding_service(config: Optional[Dict[str, Any]] = None) -> Embeddi
     if not config:
         config = {}
 
-    provider = config.get("provider", "sentence-transformers")
-    model_name = config.get("model_name", "all-MiniLM-L6-v2")
+    provider = config.get("provider")  # None → auto-detect
+    model_name = config.get("model_name")
 
-    # Map common model names to full paths
+    # Map common shorthand names
     model_map = {
         "mini": "all-MiniLM-L6-v2",
         "base": "all-mpnet-base-v2",
         "large": "all-roberta-large-v1",
-        "multilingual": "paraphrase-multilingual-MiniLM-L12-v2"
+        "multilingual": "paraphrase-multilingual-MiniLM-L12-v2",
     }
 
     if model_name in model_map:
         model_name = model_map[model_name]
 
-    # Check if we should use mock for testing
-    if provider == "sentence-transformers" and not SENTENCE_TRANSFORMERS_AVAILABLE:
-        logger.info("Using mock embeddings for testing (sentence-transformers not installed)")
-        provider = "mock"
-
     return EmbeddingService(
         model_name=model_name,
         provider=provider,
-        cache_embeddings=config.get("cache_embeddings", True)
+        cache_embeddings=config.get("cache_embeddings", True),
+        embedding_dim=config.get("embedding_dim"),
     )

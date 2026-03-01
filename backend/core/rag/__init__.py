@@ -7,6 +7,10 @@ from .response_cache import SemanticResponseCache
 from .self_rag import SelfRAGController, RetrievalVerifier
 from .query_decomposer import QueryDecomposer
 from .feedback import RetrievalFeedback
+from .proposition_indexer import PropositionExtractor, PropositionRepository, Proposition
+from .knowledge_graph import (
+    KGExtractor, KnowledgeGraphRepository, KnowledgeGraphTraverser, KGTriple,
+)
 
 __all__ = [
     "RAGPipeline",
@@ -20,4 +24,11 @@ __all__ = [
     "RetrievalVerifier",
     "QueryDecomposer",
     "RetrievalFeedback",
+    "PropositionExtractor",
+    "PropositionRepository",
+    "Proposition",
+    "KGExtractor",
+    "KnowledgeGraphRepository",
+    "KnowledgeGraphTraverser",
+    "KGTriple",
 ]

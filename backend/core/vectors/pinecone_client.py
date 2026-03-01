@@ -29,7 +29,7 @@ class PineconeClient:
         api_key: Optional[str] = None,
         environment: Optional[str] = None,
         index_name: str = "academe",
-        dimension: int = 384,
+        dimension: int = 768,
         metric: str = "cosine"
     ):
         """

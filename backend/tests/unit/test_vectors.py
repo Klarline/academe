@@ -2,7 +2,7 @@
 Comprehensive tests for vectors module.
 
 Tests cover:
-- Embedding generation (sentence transformers, mock)
+- Embedding generation (gemini, sentence transformers, mock)
 - Vector similarity calculations
 - Semantic search service
 - Pinecone integration (mocked)
@@ -32,7 +32,7 @@ class TestEmbeddingService:
         service = EmbeddingService(provider="mock")
         
         assert service.provider == "mock"
-        assert service.embedding_dim == 384
+        assert service.embedding_dim == 768
         assert service.cache is not None
 
     def test_generate_embedding_returns_vector(self):
@@ -42,7 +42,7 @@ class TestEmbeddingService:
         embedding = service.generate_embedding("test text")
         
         assert isinstance(embedding, list)
-        assert len(embedding) == 384
+        assert len(embedding) == 768
         assert all(isinstance(x, float) for x in embedding)
 
     def test_generate_embedding_same_text_same_vector(self):
@@ -90,7 +90,7 @@ class TestEmbeddingService:
         embeddings = service.generate_embeddings_batch(texts)
         
         assert len(embeddings) == 3
-        assert all(len(emb) == 384 for emb in embeddings)
+        assert all(len(emb) == 768 for emb in embeddings)
 
     def test_calculate_similarity(self):
         """Test cosine similarity calculation."""
@@ -140,7 +140,7 @@ class TestEmbeddingService:
         
         assert info["provider"] == "mock"
         assert info["model_name"] == "test-model"
-        assert info["embedding_dimension"] == 384
+        assert info["embedding_dimension"] == 768
         assert info["cache_enabled"] is True
 
     def test_concurrent_generate_embedding_same_text_same_vector(self):
@@ -161,7 +161,7 @@ class TestEmbeddingService:
         all_embeddings = [emb for batch in results for emb in batch]
         assert len(all_embeddings) == num_workers * calls_per_worker
         first = all_embeddings[0]
-        assert len(first) == 384
+        assert len(first) == 768
         for emb in all_embeddings:
             assert emb == first, "Same text must produce same embedding under concurrency"
 
@@ -188,7 +188,7 @@ class TestEmbeddingService:
         for batch_list in results:
             for embeddings in batch_list:
                 assert isinstance(embeddings, list)
-                assert all(isinstance(emb, list) and len(emb) == 384 for emb in embeddings)
+                assert all(isinstance(emb, list) and len(emb) == 768 for emb in embeddings)
 
 
 class TestHybridEmbeddingService:
@@ -204,7 +204,7 @@ class TestHybridEmbeddingService:
         service = HybridEmbeddingService(models)
         
         assert len(service.services) == 2
-        assert service.embedding_dim == 384 * 2  # Combined dimension
+        assert service.embedding_dim == 768 * 2  # Combined dimension
 
     def test_hybrid_generate_embedding(self):
         """Test hybrid embedding generation."""
@@ -217,18 +217,18 @@ class TestHybridEmbeddingService:
         embedding = service.generate_embedding("test")
         
         # Should concatenate both embeddings
-        assert len(embedding) == 768  # 384 * 2
+        assert len(embedding) == 768 * 2  # Two mock models concatenated
 
 
 class TestCreateEmbeddingService:
     """Test embedding service factory."""
 
     def test_create_with_no_config(self):
-        """Test creating service with default config."""
+        """Test creating service with default config (auto-detect provider)."""
         service = create_embedding_service()
         
         assert service is not None
-        assert service.provider in ["sentence-transformers", "mock"]
+        assert service.provider in ["gemini", "sentence-transformers", "mock"]
 
     def test_create_with_custom_config(self):
         """Test creating service with custom config."""

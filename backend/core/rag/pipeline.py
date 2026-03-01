@@ -1,6 +1,7 @@
 """RAG (Retrieval-Augmented Generation) pipeline for Academe."""
 
 import logging
+import re
 from typing import List, Dict, Optional, Any, Tuple
 
 from core.vectors import SemanticSearchService, HybridSearchService
@@ -14,6 +15,12 @@ from core.rag.response_cache import SemanticResponseCache
 from core.rag.self_rag import SelfRAGController
 from core.rag.query_decomposer import QueryDecomposer, retrieve_with_decomposition
 from core.rag.feedback import RetrievalFeedback
+from core.rag.proposition_indexer import (
+    PropositionExtractor, PropositionRepository, Proposition,
+)
+from core.rag.knowledge_graph import (
+    KGExtractor, KnowledgeGraphRepository, KnowledgeGraphTraverser,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +40,8 @@ class RAGPipeline:
         use_self_rag: bool = True,
         use_query_decomposition: bool = True,
         use_response_cache: bool = True,
+        use_propositions: bool = True,
+        use_knowledge_graph: bool = True,
     ):
         """
         Initialize RAG pipeline.
@@ -48,6 +57,8 @@ class RAGPipeline:
             use_self_rag: Verify retrieval quality and retry if insufficient
             use_query_decomposition: Split complex questions into sub-queries
             use_response_cache: Cache answers by semantic similarity
+            use_propositions: Extract and index atomic propositions from chunks
+            use_knowledge_graph: Extract entity-relationship triples for multi-hop
         """
         base_search = search_service or SemanticSearchService()
         if use_hybrid_search and not isinstance(base_search, HybridSearchService):
@@ -73,6 +84,14 @@ class RAGPipeline:
         self.feedback = RetrievalFeedback()
         self.chunk_repo = ChunkRepository()
         self.context_window = 1  # adjacent chunks to include on each side
+
+        # Proposition-based indexing
+        self.proposition_extractor = PropositionExtractor() if use_propositions else None
+        self.proposition_repo = PropositionRepository() if use_propositions else None
+
+        # Knowledge graph
+        self.kg_extractor = KGExtractor() if use_knowledge_graph else None
+        self.kg_repo = KnowledgeGraphRepository() if use_knowledge_graph else None
 
     def process_document_upload(
         self,
@@ -122,7 +141,34 @@ class RAGPipeline:
         if not index_success:
             return False, f"Document processed but indexing failed: {index_message}", document
 
-        return True, f"Document uploaded and indexed: {len(chunks)} chunks", document
+        # Extract propositions for fine-grained retrieval
+        prop_count = 0
+        if self.proposition_extractor and self.proposition_repo:
+            try:
+                propositions = self.proposition_extractor.extract_from_chunks(
+                    chunks, document.id, user_id
+                )
+                prop_count = self.proposition_repo.store_propositions(propositions)
+            except Exception as e:
+                logger.warning(f"Proposition extraction failed (non-fatal): {e}")
+
+        # Extract knowledge graph triples
+        kg_count = 0
+        if self.kg_extractor and self.kg_repo:
+            try:
+                triples = self.kg_extractor.extract_from_chunks(chunks, document.id)
+                kg_count = self.kg_repo.store_triples(triples)
+            except Exception as e:
+                logger.warning(f"KG extraction failed (non-fatal): {e}")
+
+        extras = []
+        if prop_count:
+            extras.append(f"{prop_count} propositions")
+        if kg_count:
+            extras.append(f"{kg_count} KG triples")
+        extra_msg = f", {', '.join(extras)}" if extras else ""
+
+        return True, f"Document uploaded and indexed: {len(chunks)} chunks{extra_msg}", document
 
     def record_feedback(
         self,
@@ -225,6 +271,11 @@ class RAGPipeline:
         # Build context from search results
         context = self._build_context(search_results)
 
+        # Augment with knowledge graph context for multi-hop reasoning
+        kg_context = self._get_kg_context(query, search_results)
+        if kg_context:
+            context = context + "\n\n" + kg_context
+
         # Generate answer with original query (not rewritten) for natural response
         answer = self._generate_answer(query, context, user)
 
@@ -245,6 +296,61 @@ class RAGPipeline:
         if isinstance(self.search_service, HybridSearchService):
             return self.search_service.vector_search.embedding_service
         return getattr(self.search_service, "embedding_service", None)
+
+    def _get_kg_context(
+        self, query: str, search_results: List[DocumentSearchResult]
+    ) -> str:
+        """
+        Build knowledge graph context for multi-hop reasoning.
+
+        Loads triples from documents referenced in search results, then
+        traverses the graph from entities mentioned in the query to find
+        related facts that may not appear in the retrieved chunks.
+        """
+        if not self.kg_repo:
+            return ""
+
+        try:
+            # Collect triples from all documents in the search results
+            doc_ids = {r.chunk.document_id for r in search_results}
+            all_triples = []
+            for doc_id in doc_ids:
+                all_triples.extend(self.kg_repo.get_document_triples(doc_id))
+
+            if not all_triples:
+                return ""
+
+            traverser = KnowledgeGraphTraverser(all_triples)
+
+            # Extract key terms from query for graph traversal
+            query_terms = self._extract_query_entities(query)
+            all_paths = []
+            for term in query_terms:
+                paths = traverser.multi_hop(term, max_hops=2, max_results=10)
+                all_paths.extend(paths)
+
+            return traverser.format_context(all_paths, max_triples=10)
+        except Exception as e:
+            logger.debug(f"KG context generation failed: {e}")
+            return ""
+
+    @staticmethod
+    def _extract_query_entities(query: str) -> List[str]:
+        """Extract potential entity mentions from a query for graph lookup."""
+        stop_words = {
+            "what", "how", "why", "when", "where", "which", "who", "is", "are",
+            "was", "were", "do", "does", "did", "the", "a", "an", "in", "on",
+            "at", "to", "for", "of", "with", "by", "from", "and", "or", "not",
+            "can", "could", "would", "should", "will", "this", "that", "it",
+            "its", "be", "been", "being", "have", "has", "had", "about", "into",
+            "used", "using", "between", "explain", "describe", "tell", "me",
+        }
+        words = re.findall(r"\b[a-zA-Z]{2,}\b", query.lower())
+        entities = [w for w in words if w not in stop_words]
+        # Also try bigrams
+        bigrams = [f"{words[i]} {words[i+1]}" for i in range(len(words) - 1)
+                    if words[i] not in stop_words and words[i+1] not in stop_words]
+        return bigrams + entities
 
     def _full_search(
         self,
