@@ -366,6 +366,83 @@ class ChunkRepository:
             logger.error(f"Failed to get document chunks: {e}")
             return []
 
+    def get_user_chunks(
+        self,
+        user_id: str,
+        include_deleted_docs: bool = False
+    ) -> List[DocumentChunk]:
+        """
+        Get all chunks for a user (for BM25 index building).
+
+        Args:
+            user_id: User ID
+            include_deleted_docs: If False, exclude chunks from deleted documents
+
+        Returns:
+            List of chunks from all user documents, ordered by document then index
+        """
+        try:
+            collection = self.db.get_database()["chunks"]
+            query = {"user_id": user_id}
+
+            if not include_deleted_docs:
+                # Exclude chunks from deleted documents
+                docs_collection = self.db.get_database()["documents"]
+                deleted_doc_ids = [
+                    str(doc["_id"])
+                    for doc in docs_collection.find(
+                        {"user_id": user_id, "processing_status": "deleted"},
+                        {"_id": 1}
+                    )
+                ]
+                if deleted_doc_ids:
+                    query["document_id"] = {"$nin": deleted_doc_ids}
+
+            cursor = collection.find(query).sort(
+                [("document_id", 1), ("chunk_index", 1)]
+            )
+
+            return [DocumentChunk.from_mongo_dict(c) for c in cursor]
+
+        except Exception as e:
+            logger.error(f"Failed to get user chunks: {e}")
+            return []
+
+    def get_adjacent_chunks(
+        self,
+        document_id: str,
+        chunk_index: int,
+        window: int = 1,
+    ) -> List[DocumentChunk]:
+        """
+        Fetch a chunk and its neighbors within ±window of chunk_index.
+
+        Used by the sliding-window context builder to expand retrieved
+        chunks with surrounding text from the same document.
+
+        Args:
+            document_id: Document ID
+            chunk_index: Center chunk index
+            window: How many neighbors on each side
+
+        Returns:
+            Ordered list of chunks covering [chunk_index-window, chunk_index+window]
+        """
+        try:
+            collection = self.db.get_database()["chunks"]
+            lo = max(0, chunk_index - window)
+            hi = chunk_index + window
+            cursor = collection.find(
+                {
+                    "document_id": document_id,
+                    "chunk_index": {"$gte": lo, "$lte": hi},
+                }
+            ).sort("chunk_index", 1)
+            return [DocumentChunk.from_mongo_dict(c) for c in cursor]
+        except Exception as e:
+            logger.error(f"Failed to get adjacent chunks: {e}")
+            return []
+
     def delete_document_chunks(self, document_id: str) -> int:
         """
         Delete all chunks for a document.

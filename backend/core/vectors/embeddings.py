@@ -1,6 +1,7 @@
 """Embedding generation service for Academe."""
 
 import logging
+import threading
 from typing import List, Optional, Dict, Any
 import hashlib
 import json
@@ -43,6 +44,7 @@ class EmbeddingService:
         self.provider = provider
         self.cache_embeddings = cache_embeddings
         self.cache = {} if cache_embeddings else None
+        self._cache_lock = threading.Lock()
 
         # Initialize model based on provider
         self.model = None
@@ -93,25 +95,26 @@ class EmbeddingService:
             logger.warning("Empty text provided for embedding")
             return self._get_zero_vector()
 
-        # Check cache
-        if self.cache_embeddings:
-            cache_key = self._get_cache_key(text)
-            if cache_key in self.cache:
+        cache_key = self._get_cache_key(text) if self.cache_embeddings else None
+
+        with self._cache_lock:
+            # Check cache
+            if self.cache_embeddings and cache_key in self.cache:
                 return self.cache[cache_key]
 
-        # Generate embedding based on provider
-        if self.provider == "sentence-transformers":
-            embedding = self._generate_st_embedding(text)
-        elif self.provider == "openai":
-            embedding = self._generate_openai_embedding(text)
-        else:  # mock
-            embedding = self._generate_mock_embedding(text)
+            # Generate embedding based on provider (under lock for thread-safe model/API use)
+            if self.provider == "sentence-transformers":
+                embedding = self._generate_st_embedding(text)
+            elif self.provider == "openai":
+                embedding = self._generate_openai_embedding(text)
+            else:  # mock
+                embedding = self._generate_mock_embedding(text)
 
-        # Cache if enabled
-        if self.cache_embeddings and embedding:
-            self.cache[cache_key] = embedding
+            # Cache if enabled
+            if self.cache_embeddings and embedding:
+                self.cache[cache_key] = embedding
 
-        return embedding
+            return embedding
 
     def generate_embeddings_batch(
         self,
@@ -180,10 +183,10 @@ class EmbeddingService:
             return self._get_zero_vector()
 
     def _generate_mock_embedding(self, text: str) -> List[float]:
-        """Generate mock embedding for testing."""
-        # Create deterministic mock embedding based on text
-        np.random.seed(hash(text) % 2**32)
-        embedding = np.random.randn(self.embedding_dim)
+        """Generate mock embedding for testing (thread-safe, deterministic per text)."""
+        seed = hash(text) & (2**32 - 1)
+        rng = np.random.default_rng(seed)
+        embedding = rng.standard_normal(self.embedding_dim)
         # Normalize
         embedding = embedding / np.linalg.norm(embedding)
         return embedding.tolist()

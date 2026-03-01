@@ -10,6 +10,13 @@ from core.documents.storage import ChunkRepository, DocumentRepository
 
 logger = logging.getLogger(__name__)
 
+try:
+    from sentence_transformers import CrossEncoder
+    CROSS_ENCODER_AVAILABLE = True
+except ImportError:
+    CROSS_ENCODER_AVAILABLE = False
+    CrossEncoder = None
+
 
 class SemanticSearchService:
     """Service for semantic search over documents."""
@@ -32,6 +39,39 @@ class SemanticSearchService:
         self.chunk_repo = ChunkRepository()
         self.doc_repo = DocumentRepository()
 
+        # Cross-encoder for reranking (optional)
+        self._reranker = None
+        if CROSS_ENCODER_AVAILABLE:
+            try:
+                self._reranker = CrossEncoder(
+                    "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                    max_length=512,
+                )
+                logger.info("Cross-encoder reranker loaded")
+            except Exception as e:
+                logger.warning(f"Reranker not available: {e}")
+
+    @staticmethod
+    def _enrich_text_for_embedding(
+        content: str,
+        document_title: Optional[str] = None,
+        section_title: Optional[str] = None,
+    ) -> str:
+        """
+        Build a contextual embedding string by prepending document metadata.
+
+        The enriched text is used only for embedding generation — the raw
+        content is still stored in Pinecone metadata for display.
+        """
+        parts = []
+        if document_title:
+            parts.append(f"Document: {document_title}")
+        if section_title:
+            parts.append(f"Section: {section_title}")
+        if parts:
+            return " | ".join(parts) + "\n" + content
+        return content
+
     def index_document(
         self,
         document: Document,
@@ -39,6 +79,10 @@ class SemanticSearchService:
     ) -> Tuple[bool, str]:
         """
         Index a document's chunks for semantic search.
+
+        Uses contextual embedding enrichment: each chunk text is prefixed
+        with the document title and section before being embedded, so the
+        embedding captures document-level context.
 
         Args:
             document: Document object
@@ -50,11 +94,18 @@ class SemanticSearchService:
         try:
             logger.info(f"Indexing document {document.id} with {len(chunks)} chunks")
 
-            # Extract text from chunks
-            texts = [chunk.content for chunk in chunks]
+            # Build enriched texts for embedding (raw content stored separately)
+            texts = [
+                self._enrich_text_for_embedding(
+                    chunk.content,
+                    document_title=document.title,
+                    section_title=chunk.section_title,
+                )
+                for chunk in chunks
+            ]
 
-            # Generate embeddings
-            logger.info("Generating embeddings...")
+            # Generate embeddings from enriched text
+            logger.info("Generating contextual embeddings...")
             embeddings = self.embedding_service.generate_embeddings_batch(texts)
 
             if len(embeddings) != len(chunks):
@@ -223,37 +274,85 @@ class SemanticSearchService:
         user_id: str,
         top_k: int = 10,
         rerank_top_k: int = 5,
+        initial_multiplier: int = 2,
         **kwargs
     ) -> List[DocumentSearchResult]:
         """
-        Search with reranking for better relevance.
+        Search with cross-encoder reranking for better relevance.
+
+        Retrieves more candidates initially, then reranks with cross-encoder
+        for improved precision. Falls back to keyword-overlap if reranker
+        unavailable.
 
         Args:
             query: Search query
             user_id: User ID
-            top_k: Initial number of results
+            top_k: Initial number of results to retrieve
             rerank_top_k: Number of results after reranking
+            initial_multiplier: Retrieve top_k * multiplier for reranking
             **kwargs: Additional search parameters
 
         Returns:
             Reranked search results
         """
-        # Get initial results
+        # Get initial results (more than needed for reranking)
         initial_results = self.search(
             query=query,
             user_id=user_id,
-            top_k=top_k,
+            top_k=max(top_k * initial_multiplier, 20),
             **kwargs
         )
 
         if len(initial_results) <= rerank_top_k:
-            return initial_results
+            return initial_results[:rerank_top_k]
 
-        # Simple reranking based on content overlap
-        # In production, use a cross-encoder model
-        reranked = self._rerank_results(query, initial_results)
+        # Cross-encoder reranking when available
+        if self._reranker:
+            reranked = self._rerank_with_cross_encoder(query, initial_results)
+        else:
+            reranked = self._rerank_results(query, initial_results)
 
         return reranked[:rerank_top_k]
+
+    def rerank_results(
+        self,
+        query: str,
+        results: List[DocumentSearchResult],
+        top_k: Optional[int] = None,
+    ) -> List[DocumentSearchResult]:
+        """
+        Rerank existing results with cross-encoder (or keyword fallback).
+
+        Useful when initial retrieval comes from hybrid search.
+        """
+        if not results:
+            return []
+        if top_k is not None and len(results) <= top_k:
+            return results[:top_k]
+
+        if self._reranker:
+            reranked = self._rerank_with_cross_encoder(query, results)
+        else:
+            reranked = self._rerank_results(query, results)
+
+        return reranked[:top_k] if top_k else reranked
+
+    def _rerank_with_cross_encoder(
+        self,
+        query: str,
+        results: List[DocumentSearchResult],
+    ) -> List[DocumentSearchResult]:
+        """Rerank using cross-encoder model."""
+        pairs = [[query, r.chunk.content[:512]] for r in results]
+        scores = self._reranker.predict(pairs)
+
+        for result, score in zip(results, scores):
+            result.score = float(score)
+
+        results.sort(key=lambda x: x.score, reverse=True)
+        for i, result in enumerate(results):
+            result.rank = i + 1
+        return results
 
     def _rerank_results(
         self,
@@ -261,39 +360,24 @@ class SemanticSearchService:
         results: List[DocumentSearchResult]
     ) -> List[DocumentSearchResult]:
         """
-        Rerank results based on additional criteria.
-
-        Args:
-            query: Original query
-            results: Initial search results
-
-        Returns:
-            Reranked results
+        Fallback reranking based on keyword overlap.
         """
-        # Simple reranking based on keyword overlap
         query_terms = set(query.lower().split())
 
         for result in results:
             chunk_terms = set(result.chunk.content.lower().split())
             overlap = len(query_terms & chunk_terms)
-
-            # Boost score based on overlap
             boost = overlap * 0.05
             result.score = min(1.0, result.score + boost)
 
-            # Boost if section title matches
             if result.chunk.section_title:
                 title_terms = set(result.chunk.section_title.lower().split())
                 if query_terms & title_terms:
                     result.score = min(1.0, result.score + 0.1)
 
-        # Re-sort by new scores
         results.sort(key=lambda x: x.score, reverse=True)
-
-        # Update ranks
         for i, result in enumerate(results):
             result.rank = i + 1
-
         return results
 
     def find_similar_chunks(

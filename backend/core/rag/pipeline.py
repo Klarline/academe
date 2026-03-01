@@ -3,10 +3,17 @@
 import logging
 from typing import List, Dict, Optional, Any, Tuple
 
-from core.vectors import SemanticSearchService
+from core.vectors import SemanticSearchService, HybridSearchService
 from core.documents import DocumentManager
+from core.documents.storage import ChunkRepository
 from core.models import UserProfile, Document, DocumentSearchResult
 from core.config import get_llm
+from core.rag.query_rewriter import QueryRewriter, HyDE
+from core.rag.adaptive_retrieval import AdaptiveRetriever
+from core.rag.response_cache import SemanticResponseCache
+from core.rag.self_rag import SelfRAGController
+from core.rag.query_decomposer import QueryDecomposer, retrieve_with_decomposition
+from core.rag.feedback import RetrievalFeedback
 
 logger = logging.getLogger(__name__)
 
@@ -17,17 +24,55 @@ class RAGPipeline:
     def __init__(
         self,
         search_service: Optional[SemanticSearchService] = None,
-        document_manager: Optional[DocumentManager] = None
+        document_manager: Optional[DocumentManager] = None,
+        use_hybrid_search: bool = True,
+        use_query_rewriting: bool = True,
+        use_hyde: bool = False,
+        use_adaptive_retrieval: bool = True,
+        use_multi_query: bool = True,
+        use_self_rag: bool = True,
+        use_query_decomposition: bool = True,
+        use_response_cache: bool = True,
     ):
         """
         Initialize RAG pipeline.
 
         Args:
-            search_service: Semantic search service
+            search_service: Semantic search service (or HybridSearchService)
             document_manager: Document manager
+            use_hybrid_search: Use hybrid BM25+vector search (default True)
+            use_query_rewriting: Use LLM-based query rewriting (default True)
+            use_hyde: Use HyDE for retrieval (default False — enable per-query)
+            use_adaptive_retrieval: Use AdaptiveRetriever for query-type strategies
+            use_multi_query: Generate multiple query variants for broader recall
+            use_self_rag: Verify retrieval quality and retry if insufficient
+            use_query_decomposition: Split complex questions into sub-queries
+            use_response_cache: Cache answers by semantic similarity
         """
-        self.search_service = search_service or SemanticSearchService()
+        base_search = search_service or SemanticSearchService()
+        if use_hybrid_search and not isinstance(base_search, HybridSearchService):
+            self.search_service = HybridSearchService(vector_search=base_search)
+        else:
+            self.search_service = base_search
+
+        # Adaptive retriever wraps hybrid search with query-type strategies
+        if use_adaptive_retrieval and isinstance(self.search_service, HybridSearchService):
+            self.adaptive_retriever = AdaptiveRetriever(
+                hybrid_search=self.search_service
+            )
+        else:
+            self.adaptive_retriever = None
+
         self.document_manager = document_manager or DocumentManager()
+        self.query_rewriter = QueryRewriter() if use_query_rewriting else None
+        self.use_multi_query = use_multi_query
+        self.hyde = HyDE() if use_hyde else None
+        self.self_rag = SelfRAGController() if use_self_rag else None
+        self.decomposer = QueryDecomposer() if use_query_decomposition else None
+        self.response_cache = SemanticResponseCache() if use_response_cache else None
+        self.feedback = RetrievalFeedback()
+        self.chunk_repo = ChunkRepository()
+        self.context_window = 1  # adjacent chunks to include on each side
 
     def process_document_upload(
         self,
@@ -79,43 +124,100 @@ class RAGPipeline:
 
         return True, f"Document uploaded and indexed: {len(chunks)} chunks", document
 
+    def record_feedback(
+        self,
+        user_id: str,
+        query: str,
+        answer: str,
+        sources: List[Dict[str, Any]],
+        rating: int,
+        comment: Optional[str] = None,
+    ) -> str:
+        """
+        Record user feedback (thumbs up/down) on a RAG response.
+
+        Args:
+            user_id: User ID.
+            query: The original query.
+            answer: The generated answer.
+            sources: Source info list.
+            rating: 1 (positive) or -1 (negative).
+            comment: Optional user comment.
+
+        Returns:
+            Feedback entry ID.
+        """
+        return self.feedback.record(
+            user_id=user_id,
+            query=query,
+            answer=answer,
+            sources=sources,
+            rating=rating,
+            comment=comment,
+        )
+
     def query_with_context(
         self,
         query: str,
         user: UserProfile,
         top_k: int = 5,
         use_reranking: bool = True,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        use_hyde: Optional[bool] = None,
         **search_kwargs
     ) -> Tuple[str, List[DocumentSearchResult]]:
         """
-        Answer a query using RAG.
+        Answer a query using the full RAG pipeline.
+
+        Flow:
+        1. Check semantic response cache
+        2. Query rewriting (pronoun resolution, term expansion)
+        3. Query decomposition (split complex questions)
+        4. Multi-query generation (alternative phrasings)
+        5. Adaptive retrieval (query-type-aware strategy)
+        6. Self-RAG verification (check sufficiency, retry if needed)
+        7. Context building (sliding window / parent-child expansion)
+        8. LLM generation
+        9. Cache the result
 
         Args:
             query: User's question
             user: User profile
             top_k: Number of context chunks to retrieve
             use_reranking: Whether to use reranking
+            conversation_history: Recent messages for query rewriting
+            use_hyde: Use HyDE for this query (None = use pipeline default)
             **search_kwargs: Additional search parameters
 
         Returns:
             Tuple of (answer, source_chunks)
         """
-        # Search for relevant chunks
-        if use_reranking:
-            search_results = self.search_service.search_with_reranking(
-                query=query,
-                user_id=user.id,
-                top_k=top_k * 2,
-                rerank_top_k=top_k,
-                **search_kwargs
-            )
-        else:
-            search_results = self.search_service.search(
-                query=query,
-                user_id=user.id,
-                top_k=top_k,
-                **search_kwargs
-            )
+        # Step 0: Check response cache
+        if self.response_cache:
+            try:
+                embedding_service = self._get_embedding_service()
+                if embedding_service:
+                    q_embedding = embedding_service.generate_embedding(query)
+                    cached = self.response_cache.get(query, q_embedding)
+                    if cached:
+                        return cached  # (answer, sources)
+            except Exception as e:
+                logger.debug(f"Cache lookup failed: {e}")
+
+        # Step 1: Query rewriting (resolve pronouns, expand terms)
+        search_query = query
+        if self.query_rewriter and conversation_history:
+            search_query = self.query_rewriter.rewrite(query, conversation_history)
+
+        # Step 2: Retrieve (with decomposition, multi-query, adaptive, self-rag)
+        search_results = self._full_search(
+            query=search_query,
+            user_id=user.id,
+            top_k=top_k,
+            use_reranking=use_reranking,
+            use_hyde=use_hyde if use_hyde is not None else (self.hyde is not None),
+            **search_kwargs,
+        )
 
         if not search_results:
             return self._generate_no_context_answer(query, user), []
@@ -123,14 +225,278 @@ class RAGPipeline:
         # Build context from search results
         context = self._build_context(search_results)
 
-        # Generate answer with context
+        # Generate answer with original query (not rewritten) for natural response
         answer = self._generate_answer(query, context, user)
+
+        # Cache the result
+        if self.response_cache:
+            try:
+                embedding_service = self._get_embedding_service()
+                if embedding_service:
+                    q_embedding = embedding_service.generate_embedding(query)
+                    self.response_cache.put(query, q_embedding, answer, search_results)
+            except Exception as e:
+                logger.debug(f"Cache put failed: {e}")
 
         return answer, search_results
 
+    def _get_embedding_service(self):
+        """Get the embedding service from the search stack."""
+        if isinstance(self.search_service, HybridSearchService):
+            return self.search_service.vector_search.embedding_service
+        return getattr(self.search_service, "embedding_service", None)
+
+    def _full_search(
+        self,
+        query: str,
+        user_id: str,
+        top_k: int = 5,
+        use_reranking: bool = True,
+        use_hyde: bool = False,
+        **search_kwargs,
+    ) -> List[DocumentSearchResult]:
+        """
+        Full search pipeline: decompose → multi-query → adaptive → self-rag.
+
+        Layers applied in order:
+        1. Query decomposition (if complex question)
+        2. Multi-query expansion (alternative phrasings)
+        3. AdaptiveRetriever or standard _search
+        4. Self-RAG verification + retry
+        """
+        base_kwargs = dict(
+            user_id=user_id,
+            top_k=top_k,
+            use_reranking=use_reranking,
+            use_hyde=use_hyde,
+            **search_kwargs,
+        )
+
+        # Layer 1: Query decomposition
+        if self.decomposer:
+            try:
+                results = retrieve_with_decomposition(
+                    query=query,
+                    search_fn=lambda **kw: self._adaptive_or_base_search(**kw),
+                    decomposer=self.decomposer,
+                    **base_kwargs,
+                )
+                if results:
+                    return self._maybe_verify(query, results, base_kwargs)
+            except Exception as e:
+                logger.warning(f"Decomposition failed, falling back: {e}")
+
+        # Layer 2: Multi-query expansion
+        if self.use_multi_query and self.query_rewriter:
+            try:
+                results = self._search_multi_query(query=query, **base_kwargs)
+                if results:
+                    return self._maybe_verify(query, results, base_kwargs)
+            except Exception as e:
+                logger.warning(f"Multi-query failed, falling back: {e}")
+
+        # Layer 3: Standard adaptive/base search
+        results = self._adaptive_or_base_search(query=query, **base_kwargs)
+
+        # Layer 4: Self-RAG verification
+        return self._maybe_verify(query, results, base_kwargs)
+
+    def _adaptive_or_base_search(
+        self,
+        query: str,
+        user_id: str,
+        top_k: int = 5,
+        use_reranking: bool = True,
+        **kwargs,
+    ) -> List[DocumentSearchResult]:
+        """Use AdaptiveRetriever if available, else fall back to _search."""
+        kwargs.pop("use_hyde", None)
+        if self.adaptive_retriever:
+            return self.adaptive_retriever.retrieve(
+                query=query,
+                user_id=user_id,
+                top_k=top_k,
+                use_reranking=use_reranking,
+            )
+        return self._search(
+            query=query,
+            user_id=user_id,
+            top_k=top_k,
+            use_reranking=use_reranking,
+        )
+
+    def _search_multi_query(
+        self,
+        query: str,
+        user_id: str,
+        top_k: int = 5,
+        use_reranking: bool = True,
+        **kwargs,
+    ) -> List[DocumentSearchResult]:
+        """
+        Generate multiple query variants and merge results.
+
+        Retrieves for each variant and deduplicates by (doc_id, chunk_index),
+        keeping the highest score for each chunk.
+        """
+        variants = self.query_rewriter.generate_multi_query(query, num_queries=3)
+
+        all_results: Dict[str, DocumentSearchResult] = {}
+        per_variant_k = max(3, top_k)
+
+        for variant in variants:
+            results = self._adaptive_or_base_search(
+                query=variant,
+                user_id=user_id,
+                top_k=per_variant_k,
+                use_reranking=use_reranking,
+            )
+            for r in results:
+                key = f"{r.chunk.document_id}_{r.chunk.chunk_index}"
+                if key not in all_results or r.score > all_results[key].score:
+                    all_results[key] = r
+
+        merged = sorted(all_results.values(), key=lambda r: r.score, reverse=True)
+        for i, r in enumerate(merged):
+            r.rank = i + 1
+        return merged[:top_k]
+
+    def _maybe_verify(
+        self,
+        query: str,
+        results: List[DocumentSearchResult],
+        search_kwargs: Dict[str, Any],
+    ) -> List[DocumentSearchResult]:
+        """Apply Self-RAG verification if enabled."""
+        if not self.self_rag or not results:
+            return results
+
+        try:
+            return self.self_rag.search_with_verification(
+                query=query,
+                search_fn=lambda **kw: self._adaptive_or_base_search(**kw),
+                user_id=search_kwargs["user_id"],
+                top_k=search_kwargs.get("top_k", 5),
+                use_reranking=search_kwargs.get("use_reranking", True),
+            )
+        except Exception as e:
+            logger.warning(f"Self-RAG verification failed: {e}")
+            return results
+
+    def _search(
+        self,
+        query: str,
+        user_id: str,
+        top_k: int = 5,
+        use_reranking: bool = True,
+        use_hyde: bool = False,
+        **search_kwargs,
+    ) -> List[DocumentSearchResult]:
+        """
+        Internal search dispatcher: hybrid, HyDE, or plain vector.
+
+        When use_hyde=True, generates a hypothetical answer, embeds it,
+        and uses that embedding for vector search (then reranks normally).
+        """
+        # HyDE path: use hypothetical answer embedding for vector search
+        if use_hyde and self.hyde:
+            try:
+                return self._search_with_hyde(
+                    query, user_id, top_k, use_reranking, **search_kwargs
+                )
+            except Exception as e:
+                logger.warning(f"HyDE search failed, falling back to standard: {e}")
+
+        # Standard path: hybrid or vector
+        if isinstance(self.search_service, HybridSearchService):
+            if use_reranking:
+                return self.search_service.hybrid_search_with_reranking(
+                    query=query, user_id=user_id, top_k=top_k, **search_kwargs
+                )
+            return self.search_service.hybrid_search(
+                query=query, user_id=user_id, top_k=top_k, **search_kwargs
+            )
+        elif use_reranking:
+            return self.search_service.search_with_reranking(
+                query=query, user_id=user_id, top_k=top_k * 2,
+                rerank_top_k=top_k, **search_kwargs
+            )
+        return self.search_service.search(
+            query=query, user_id=user_id, top_k=top_k, **search_kwargs
+        )
+
+    def _search_with_hyde(
+        self,
+        query: str,
+        user_id: str,
+        top_k: int,
+        use_reranking: bool,
+        **search_kwargs,
+    ) -> List[DocumentSearchResult]:
+        """Search using HyDE embedding + BM25 fusion + reranking."""
+        from core.models.document import DocumentChunk
+
+        # Get HyDE embedding
+        hyde_embedding = self.hyde.get_hypothesis_embedding(query)
+
+        # Get the underlying vector search components
+        if isinstance(self.search_service, HybridSearchService):
+            vs = self.search_service.vector_search
+        else:
+            vs = self.search_service
+
+        # Vector search with HyDE embedding
+        pinecone_results = vs.pinecone_manager.search_similar_chunks(
+            user_id=user_id,
+            query_embedding=hyde_embedding,
+            top_k=top_k * 4,
+        )
+
+        # Convert to DocumentSearchResult objects (same as SemanticSearchService.search)
+        search_results = []
+        for i, result in enumerate(pinecone_results):
+            if result.get("score", 0) < 0.2:
+                continue
+            vec_id = result["id"]
+            parts = vec_id.split("_")
+            if len(parts) < 2:
+                continue
+            document_id = "_".join(parts[:-1])
+            chunk_index = int(parts[-1])
+            document = vs.doc_repo.get_document(document_id)
+            if not document:
+                continue
+            chunk = DocumentChunk(
+                document_id=document_id,
+                user_id=user_id,
+                chunk_index=chunk_index,
+                content=result["metadata"].get("content", ""),
+                page_number=result["metadata"].get("page_number"),
+                section_title=result["metadata"].get("section_title"),
+                char_count=len(result["metadata"].get("content", "")),
+                word_count=len(result["metadata"].get("content", "").split()),
+                has_code=result["metadata"].get("has_code", False),
+                has_equations=result["metadata"].get("has_equations", False),
+            )
+            search_results.append(
+                DocumentSearchResult(chunk=chunk, document=document, score=result["score"], rank=i + 1)
+            )
+
+        # Rerank with cross-encoder using the ORIGINAL query (not hypothesis)
+        if use_reranking and search_results:
+            search_results = vs.rerank_results(query, search_results, top_k=top_k)
+
+        return search_results[:top_k]
+
     def _build_context(self, search_results: List[DocumentSearchResult]) -> str:
         """
-        Build context string from search results.
+        Build context string from search results with sliding-window expansion.
+
+        For each retrieved chunk, fetches ±context_window adjacent chunks from
+        the same document so the LLM sees surrounding text.  If parent-child
+        metadata is present, the parent content is used instead.
+
+        Deduplicates so overlapping windows don't repeat text.
 
         Args:
             search_results: List of search results
@@ -139,9 +505,10 @@ class RAGPipeline:
             Formatted context string
         """
         context_parts = []
+        seen_chunks: set = set()  # (document_id, chunk_index)
 
         for result in search_results:
-            # Format each chunk with source information
+            doc_id = result.chunk.document_id
             source_info = f"[Source: {result.document.title or result.document.original_filename}"
             if result.chunk.page_number:
                 source_info += f", Page {result.chunk.page_number}"
@@ -149,7 +516,42 @@ class RAGPipeline:
                 source_info += f", Section: {result.chunk.section_title}"
             source_info += "]"
 
-            context_parts.append(f"{source_info}\n{result.chunk.content}\n")
+            # Parent-child: if chunk has parent_content in metadata, use it
+            parent_content = (result.chunk.metadata or {}).get("parent_content")
+            if parent_content:
+                parent_idx = result.chunk.metadata.get("parent_chunk_index")
+                key = (doc_id, f"parent_{parent_idx}")
+                if key not in seen_chunks:
+                    seen_chunks.add(key)
+                    context_parts.append(f"{source_info}\n{parent_content}\n")
+                continue
+
+            # Sliding window: expand with adjacent chunks
+            if self.context_window > 0:
+                try:
+                    neighbors = self.chunk_repo.get_adjacent_chunks(
+                        doc_id, result.chunk.chunk_index, window=self.context_window
+                    )
+                    if neighbors:
+                        merged_parts = []
+                        for nb in neighbors:
+                            key = (doc_id, nb.chunk_index)
+                            if key not in seen_chunks:
+                                seen_chunks.add(key)
+                                merged_parts.append(nb.content)
+                        if merged_parts:
+                            context_parts.append(
+                                f"{source_info}\n" + "\n".join(merged_parts) + "\n"
+                            )
+                        continue
+                except Exception as e:
+                    logger.debug(f"Sliding window fallback: {e}")
+
+            # Fallback: just use the retrieved chunk
+            key = (doc_id, result.chunk.chunk_index)
+            if key not in seen_chunks:
+                seen_chunks.add(key)
+                context_parts.append(f"{source_info}\n{result.chunk.content}\n")
 
         return "\n---\n".join(context_parts)
 
@@ -348,11 +750,18 @@ Summary:"""
             List of related content
         """
         # Search across all documents
-        results = self.search_service.search(
-            query=query,
-            user_id=user_id,
-            top_k=top_k * 2  # Get more to filter
-        )
+        if isinstance(self.search_service, HybridSearchService):
+            results = self.search_service.hybrid_search(
+                query=query,
+                user_id=user_id,
+                top_k=top_k * 2,
+            )
+        else:
+            results = self.search_service.search(
+                query=query,
+                user_id=user_id,
+                top_k=top_k * 2,
+            )
 
         # Filter out current document if specified
         if current_document_id:

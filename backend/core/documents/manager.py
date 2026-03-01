@@ -12,6 +12,7 @@ from core.documents import (
     DocumentRepository,
     DocumentStorage,
 )
+from core.documents.doc_type_detector import detect_document_type
 from core.models.document import Document, DocumentChunk, DocumentStatus, DocumentType
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,9 @@ class DocumentManager:
         self,
         storage_path: str = "./document_storage",
         chunk_size: int = 1000,
-        chunk_overlap: int = 200
+        chunk_overlap: int = 200,
+        use_adaptive_chunking: bool = True,
+        use_parent_child: bool = False,
     ):
         """
         Initialize document manager.
@@ -33,12 +36,16 @@ class DocumentManager:
             storage_path: Base path for document storage
             chunk_size: Default chunk size
             chunk_overlap: Default chunk overlap
+            use_adaptive_chunking: Auto-detect doc type and adjust chunk params
+            use_parent_child: Use parent-child chunking for finer retrieval
         """
         self.storage = DocumentStorage(storage_path)
         self.doc_repo = DocumentRepository()
         self.chunk_repo = ChunkRepository()
         self.processor_factory = DocumentProcessorFactory()
         self.chunker = DocumentChunker(chunk_size, chunk_overlap)
+        self.use_adaptive_chunking = use_adaptive_chunking
+        self.use_parent_child = use_parent_child
 
     def upload_document(
         self,
@@ -174,13 +181,36 @@ class DocumentManager:
 
             self.doc_repo.update_document(document.id, updates)
 
-            # Chunk the document
-            chunks = self.chunker.chunk_document(
-                text,
-                document.id,
-                document.user_id,
-                metadata={"document_title": document.title}
-            )
+            # Chunk the document — adaptively when enabled
+            chunk_meta = {"document_title": document.title}
+            if self.use_parent_child:
+                chunks = self.chunker.chunk_with_parents(
+                    text,
+                    document.id,
+                    document.user_id,
+                    metadata=chunk_meta,
+                )
+            elif self.use_adaptive_chunking:
+                content_type = detect_document_type(
+                    text,
+                    page_count=metadata.get("page_count"),
+                    filename=document.original_filename,
+                )
+                logger.info(f"Detected content type '{content_type}' for {document.original_filename}")
+                chunks = self.chunker.adaptive_chunk(
+                    text,
+                    content_type,
+                    document.id,
+                    document.user_id,
+                    metadata=chunk_meta,
+                )
+            else:
+                chunks = self.chunker.chunk_document(
+                    text,
+                    document.id,
+                    document.user_id,
+                    metadata=chunk_meta,
+                )
 
             # Save chunks
             chunk_ids = self.chunk_repo.create_chunks(chunks)

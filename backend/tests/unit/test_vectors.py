@@ -7,8 +7,10 @@ Tests cover:
 - Semantic search service
 - Pinecone integration (mocked)
 - Caching behavior
+- Thread-safety under concurrency
 """
 
+import concurrent.futures
 import pytest
 import numpy as np
 from unittest.mock import Mock, patch, MagicMock
@@ -17,7 +19,8 @@ from core.vectors import (
     EmbeddingService,
     HybridEmbeddingService,
     create_embedding_service,
-    SemanticSearchService
+    SemanticSearchService,
+    HybridSearchService,
 )
 
 
@@ -139,6 +142,53 @@ class TestEmbeddingService:
         assert info["model_name"] == "test-model"
         assert info["embedding_dimension"] == 384
         assert info["cache_enabled"] is True
+
+    def test_concurrent_generate_embedding_same_text_same_vector(self):
+        """Under concurrency, same text must always yield the same embedding (mock)."""
+        service = EmbeddingService(provider="mock", cache_embeddings=True)
+        text = "concurrent test text"
+        num_workers = 8
+        calls_per_worker = 20
+
+        def generate_many():
+            return [service.generate_embedding(text) for _ in range(calls_per_worker)]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = [executor.submit(generate_many) for _ in range(num_workers)]
+            results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+        # Flatten: list of lists of embeddings
+        all_embeddings = [emb for batch in results for emb in batch]
+        assert len(all_embeddings) == num_workers * calls_per_worker
+        first = all_embeddings[0]
+        assert len(first) == 384
+        for emb in all_embeddings:
+            assert emb == first, "Same text must produce same embedding under concurrency"
+
+    def test_concurrent_generate_embedding_batch_no_errors(self):
+        """Concurrent generate_embeddings_batch (mock) completes without errors."""
+        service = EmbeddingService(provider="mock", cache_embeddings=True)
+        texts_list = [
+            ["a", "b", "c"],
+            ["x", "y", "z"],
+            ["same", "same", "diff"],
+        ]
+        num_repeats = 10
+
+        def run_batches():
+            out = []
+            for texts in texts_list * num_repeats:
+                out.append(service.generate_embeddings_batch(texts))
+            return out
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(run_batches) for _ in range(4)]
+            results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+        for batch_list in results:
+            for embeddings in batch_list:
+                assert isinstance(embeddings, list)
+                assert all(isinstance(emb, list) and len(emb) == 384 for emb in embeddings)
 
 
 class TestHybridEmbeddingService:
@@ -275,6 +325,7 @@ class TestModuleExports:
         from core.vectors import __all__
         
         expected = [
+            "HybridSearchService",
             "EmbeddingService",
             "HybridEmbeddingService",
             "create_embedding_service",
@@ -293,7 +344,8 @@ class TestModuleExports:
             create_embedding_service,
             PineconeClient,
             PineconeManager,
-            SemanticSearchService
+            SemanticSearchService,
+            HybridSearchService,
         )
         
         assert EmbeddingService is not None
@@ -302,3 +354,4 @@ class TestModuleExports:
         assert PineconeClient is not None
         assert PineconeManager is not None
         assert SemanticSearchService is not None
+        assert HybridSearchService is not None

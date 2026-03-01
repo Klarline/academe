@@ -40,8 +40,9 @@ AWS_SECRET_ACCESS_KEY=your_aws_secret
 AWS_REGION=us-east-1
 
 # Application
-JWT_SECRET=your_jwt_secret
+JWT_SECRET_KEY=your_jwt_secret
 GOOGLE_API_KEY=your_google_api_key
+OPENAI_API_KEY=your_openai_api_key
 PINECONE_API_KEY=your_pinecone_key
 PINECONE_INDEX_NAME=your_index_name
 ```
@@ -151,12 +152,14 @@ cd academe
 
 # Create production .env file
 cat > backend/.env << EOF
-GOOGLE_API_KEY=your_key
+GOOGLE_API_KEY=your_gemini_key
+OPENAI_API_KEY=your_openai_key
 MONGODB_URI=mongodb://admin:academe123@mongodb:27017/?authSource=admin
 REDIS_URL=redis://redis:6379/0
-JWT_SECRET=your_super_secret_key_change_this
+JWT_SECRET_KEY=your_super_secret_key_change_this
 JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
+JWT_EXPIRATION_HOURS=24
+LLM_PROVIDER=gemini
 PINECONE_API_KEY=your_pinecone_key
 PINECONE_INDEX_NAME=academe-prod
 EOF

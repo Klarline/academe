@@ -56,11 +56,21 @@ Specialized AI agents handle different tasks:
 - **Research Agent**: Synthesizes information from multiple sources with citations
 - **Practice Generator**: Creates tailored quizzes and practice problems
 
-### Hybrid RAG Pipeline
+### Advanced RAG Pipeline
 
+- **Hybrid Search**: BM25 (keyword) + vector (semantic) with weighted score fusion
+- **Cross-Encoder Reranking**: ms-marco-MiniLM re-scores candidates for precision
+- **Adaptive Chunking**: Auto-detects document type (textbook/paper/notes/code) and adjusts chunk size
+- **Contextual Embeddings**: Document title and section prepended before embedding for richer vectors
+- **Sliding Window Context**: Adjacent chunks included in LLM context for fuller answers
+- **Query Rewriting + HyDE**: LLM resolves pronouns; optional hypothetical-document retrieval
+- **Self-RAG**: LLM verifies retrieval quality; reformulates and retries if context is insufficient
+- **Query Decomposition**: Complex multi-part questions split into atomic sub-queries for better coverage
+- **Multi-Query Expansion**: 3 alternative phrasings per query for broader recall
+- **Semantic Response Cache**: Similar past queries return cached answers instantly (~1ms vs ~1s)
+- **Retrieval Feedback Loop**: Thumbs up/down tracking identifies weak queries and documents
 - **Document Mode**: Answers drawn from uploaded materials with source citations
 - **Knowledge Mode**: Falls back to LLM general knowledge when documents don't cover the topic
-- **Configurable Behavior**: User can control fallback preferences
 
 ### Personalized Learning
 
@@ -225,7 +235,8 @@ pip install -r requirements.txt
 # Configure environment
 cp .env.example .env
 # Edit .env with your API keys:
-# - GOOGLE_API_KEY (required)
+# - GOOGLE_API_KEY (required — Gemini, user-facing assistant)
+# - OPENAI_API_KEY (required — gpt-4o-mini for query rewriting, HyDE, RAGAS evaluation)
 # - MONGODB_URI (default: mongodb://localhost:27017)
 # - JWT_SECRET_KEY (generate with: python -c 'import secrets; print(secrets.token_urlsafe(32))')
 # - PINECONE_API_KEY (optional, uses mock mode if not provided)
@@ -408,23 +419,30 @@ class AgentState(TypedDict):
 
 ### RAG Pipeline Implementation
 
-**Document Processing**:
-1. **Upload** → PDF/DOCX parsing with PyPDF2/python-docx
-2. **Chunking** → Semantic chunking with overlap (500 tokens, 50 overlap)
-3. **Embedding** → Sentence-transformers (all-MiniLM-L6-v2)
-4. **Storage** → Pinecone vector database with metadata
+**Document Ingestion**:
+1. **Upload** → PDF/TXT/MD parsing with PyPDF2
+2. **Type Detection** → Auto-classify as textbook, paper, notes, or code from content signals
+3. **Adaptive Chunking** → Per-type chunk size (textbook 1200, paper 800, notes 600) with optional parent-child split
+4. **Contextual Embedding** → Prepend document title + section before embedding with Sentence-Transformers (all-MiniLM-L6-v2)
+5. **Storage** → Pinecone vector database with chunk metadata
 
-**Retrieval**:
-1. **Query Embedding** → Convert user query to vector
-2. **Semantic Search** → Top-K similarity search (K=5-10)
-3. **Reranking** → Optional reranking for precision
-4. **Context Assembly** → Format chunks with citations
+**Retrieval** (12-step pipeline):
+1. **Cache Check** → Return cached answer if semantically similar query exists (cosine > 0.95)
+2. **Query Rewriting** → LLM resolves pronouns and expands abbreviations using conversation history
+3. **Query Decomposition** → Split complex multi-part questions into atomic sub-queries
+4. **Multi-Query Expansion** → Generate 3 alternative phrasings, retrieve for each, merge results
+5. **Adaptive Retrieval** → Query-type-aware BM25/vector weights (definition, comparison, code, procedural)
+6. **Hybrid Search** → BM25 (30%) + vector (70%) weighted score fusion
+7. **Cross-Encoder Reranking** → ms-marco-MiniLM-L-6-v2 re-scores top-20 → top-5
+8. **Self-RAG Verification** → LLM judges context sufficiency; reformulates + retries if insufficient
+9. **Context Expansion** → Sliding window (±1 neighbor chunks) or parent-child expansion
 
 **Generation**:
-1. **Prompt Engineering** → Include retrieved context + system instructions
-2. **LLM Inference** → Google Gemini 2.0 Flash (default)
+1. **Prompt Engineering** → Include expanded context + system instructions
+2. **LLM Inference** → Google Gemini 2.0 Flash (user-facing), OpenAI gpt-4o-mini (infrastructure)
 3. **Streaming** → Token-by-token response via WebSocket
 4. **Citation Extraction** → Parse and format source references
+5. **Cache Store** → Save answer for future similar queries
 
 ### Database Schema
 
@@ -435,6 +453,8 @@ class AgentState(TypedDict):
 - `chunks`: Document chunks with embeddings metadata
 - `practice_sessions`: Quiz attempts and performance data
 - `progress`: Concept mastery tracking per user
+- `rag_metrics`: Retrieval performance metrics over time
+- `retrieval_feedback`: User thumbs up/down on RAG answers
 
 **Pinecone Index**:
 - Dimensions: 384 (sentence-transformers model output)
@@ -460,22 +480,39 @@ class AgentState(TypedDict):
 
 ### RAG System Deep Dive
 
-**Chunking Strategy**:
-- **Semantic Chunking**: Preserves context within chunks
-- **Chunk Size**: 500 tokens (optimal for retrieval vs context window)
-- **Overlap**: 50 tokens to prevent information loss at boundaries
-- **Metadata Preservation**: Page numbers, section headings, document titles
+**Adaptive Chunking**:
+- Auto-detects document type (textbook, paper, notes, code) from structural signals
+- Per-type profiles: textbook 1200 chars / 300 overlap, paper 800/200, notes 600/100, code 1000/150
+- Parent-child mode: large parent windows → small retrieval children with parent expansion at context time
+- Metadata preservation: page numbers, section headings, document titles
 
-**Hybrid Search** (Planned):
-- BM25 for keyword matching
-- Vector similarity for semantic search
-- Reciprocal Rank Fusion for result combination
+**Hybrid Search**:
+- BM25 for keyword matching (lazy-built, in-memory cached per user)
+- Vector similarity for semantic search (contextual embeddings with doc title + section prefix)
+- Weighted score fusion (0.3 BM25 + 0.7 vector) — tunable per query type via AdaptiveRetriever
+- Cross-encoder reranking (ms-marco-MiniLM-L-6-v2) for final precision
 
-**Evaluation Framework** (RAGAS):
-- Context Precision: How relevant are retrieved chunks
-- Context Recall: Coverage of relevant information
-- Faithfulness: Answer grounded in context
-- Answer Relevancy: Response addresses query
+**Query Optimization**:
+- LLM-based query rewriting to resolve pronouns and expand abbreviations
+- HyDE (Hypothetical Document Embeddings) for better semantic retrieval
+- Adaptive retrieval adjusts strategy based on query type (definition, comparison, code, procedural)
+- Multi-query expansion: 3 alternative phrasings retrieved and merged for broader recall
+- Query decomposition: complex multi-part questions split into atomic sub-queries
+
+**Self-Correction & Caching**:
+- Self-RAG: LLM verifies if retrieved context is sufficient; reformulates query and retries (up to 2x) if not
+- Semantic response cache: cosine similarity lookup (threshold 0.95), TTL-based expiry, auto-invalidation on document changes
+- Retrieval feedback loop: thumbs up/down stored in MongoDB; identifies weak documents and tracks satisfaction rate
+
+**Context Expansion**:
+- Sliding window: retrieves ±1 adjacent chunks from the same document
+- Parent-child: retrieves small children, expands to full parent text for LLM context
+- Deduplication across overlapping windows
+
+**Evaluation Framework**:
+- Level 1 (retrieval-only): Precision@k, Recall@k, MRR via RetrievalEvaluator
+- Level 2 (end-to-end): RAGAS metrics — faithfulness, relevancy, context precision/recall
+- MetricsTracker: continuous logging to MongoDB with trend analysis
 
 ---
 
@@ -513,8 +550,8 @@ academe/
 │   │   ├── auth/              # JWT authentication service
 │   │   ├── config/            # Configuration management
 │   │   ├── database/          # MongoDB repositories
-│   │   ├── documents/         # Document processing & chunking
-│   │   ├── evaluation/        # RAGAS quality metrics
+│   │   ├── documents/         # Adaptive chunking, type detection, parent-child
+│   │   ├── evaluation/        # Retrieval evaluator, RAGAS, metrics tracker
 │   │   ├── graph/             # LangGraph workflow orchestration
 │   │   ├── memory/            # Adaptive context management
 │   │   ├── models/            # Pydantic data models
@@ -523,12 +560,18 @@ academe/
 │   │   ├── celery_config.py   # Task queue configuration
 │   │   └── tasks.py           # Background job definitions
 │   ├── tests/                 # Comprehensive test suite
-│   │   └── unit/              # 217+ unit tests
-│   │       ├── agents/        # Agent behavior tests
-│   │       ├── test_auth_service.py
-│   │       ├── test_database.py
-│   │       ├── test_documents.py
-│   │       └── test_graph.py
+│   │   ├── unit/              # 275+ unit tests
+│   │   │   ├── agents/        # Agent behavior tests
+│   │   │   ├── test_auth_service.py
+│   │   │   ├── test_chunking_features.py  # Adaptive chunking, parent-child, context
+│   │   │   ├── test_database.py
+│   │   │   ├── test_documents.py
+│   │   │   ├── test_graph.py
+│   │   │   ├── test_rag_advanced.py       # Self-RAG, cache, decomposition, feedback
+│   │   │   └── test_vectors.py
+│   │   └── evaluation/        # RAG evaluation suite
+│   │       ├── test_retrieval_evaluator.py
+│   │       └── chunking_test_cases.py
 │   ├── requirements.txt       # Python dependencies
 │   └── .env.example           # Environment template
 ├── frontend/
@@ -602,7 +645,8 @@ GET    /metrics                     # Prometheus metrics
 
 ```bash
 # Required
-GOOGLE_API_KEY=your_google_api_key              # Google Gemini API
+GOOGLE_API_KEY=your_google_api_key              # Gemini — user-facing assistant
+OPENAI_API_KEY=your_openai_key                  # gpt-4o-mini — query rewriting, HyDE, RAGAS eval
 MONGODB_URI=mongodb://localhost:27017           # MongoDB connection
 JWT_SECRET_KEY=your_32_char_minimum_secret      # JWT signing key
 
@@ -611,8 +655,7 @@ PINECONE_API_KEY=your_pinecone_key             # Pinecone API (uses mock if not 
 PINECONE_INDEX_NAME=academe-prod               # Pinecone index name
 
 # Optional - Alternative LLM Providers
-ANTHROPIC_API_KEY=your_claude_key              # Claude API
-OPENAI_API_KEY=your_openai_key                 # OpenAI API
+ANTHROPIC_API_KEY=your_claude_key              # Claude API (alternative to Gemini)
 LLM_PROVIDER=gemini                             # gemini|claude|openai
 
 # Optional - Advanced
@@ -665,9 +708,14 @@ NEXT_PUBLIC_WS_URL=ws://localhost:8000          # WebSocket URL
 
 ### Guides
 
+- **[RAG Architecture](docs/RAG_ARCHITECTURE.md)** - Retrieval pipeline: hybrid search, adaptive chunking, contextual embeddings, sliding window
+- **[Design Decisions](docs/DESIGN_DECISIONS.md)** - 14 key decisions with reasoning, trade-offs, and alternatives
+- **[Evaluation Results](docs/EVALUATION_RESULTS.md)** - Metrics framework and 6-phase measurement guide
+- **[Scaling Considerations](docs/SCALING_CONSIDERATIONS.md)** - Growth plan with migration triggers
+- **[Chunking Strategy](docs/chunking_strategy.md)** - Per-document-type chunking rationale and experiments
 - **[Deployment Guide](docs/DEPLOYMENT.md)** - Complete deployment instructions for AWS, MongoDB Atlas, and Vercel
 - **[Architecture Documentation](docs/ARCHITECTURE.md)** - System design, technical decisions, and data flow
-- **[Terraform README](terraform/README.md)** - Infrastructure as Code deployment guide
+- **[Terraform README](infrastructure/terraform/README.md)** - Infrastructure as Code deployment guide
 
 ---
 

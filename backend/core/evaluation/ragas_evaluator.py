@@ -6,6 +6,9 @@ Evaluates system quality using RAGAS metrics:
 - Answer Relevancy: How relevant is the answer to the question
 - Context Recall: How much relevant info is retrieved
 - Context Precision: How precise is the retrieved context
+
+Uses OpenAI as the judge LLM for RAGAS (best supported and most reliable).
+Falls back to simple evaluation if RAGAS or OpenAI is unavailable.
 """
 
 import logging
@@ -34,6 +37,15 @@ from core.graph.workflow import process_with_langgraph
 from core.models import UserProfile
 
 logger = logging.getLogger(__name__)
+
+
+def _get_ragas_llm():
+    """Get OpenAI LLM configured for RAGAS evaluation."""
+    try:
+        from core.config import get_openai_llm
+        return get_openai_llm(model="gpt-4o", temperature=0.0)
+    except Exception:
+        return None
 
 
 class RAGASEvaluator:
@@ -178,8 +190,12 @@ class RAGASEvaluator:
                 df = pd.DataFrame(results)
                 dataset = Dataset.from_pandas(df)
 
-                # Run RAGAS metrics
-                scores = evaluate(dataset, metrics=self.metrics)
+                # Run RAGAS metrics (use OpenAI as judge when available)
+                ragas_llm = _get_ragas_llm()
+                eval_kwargs = {"dataset": dataset, "metrics": self.metrics}
+                if ragas_llm:
+                    eval_kwargs["llm"] = ragas_llm
+                scores = evaluate(**eval_kwargs)
 
                 # Add RAGAS scores to results
                 evaluation_summary = {

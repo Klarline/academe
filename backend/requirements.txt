@@ -43,6 +43,9 @@ numpy>=1.26.0
 pandas>=2.2.0
 scikit-learn>=1.4.0
 
+# Hybrid Search (BM25)
+rank-bm25>=0.2.2
+
 # LLM Router
 jsonschema==4.19.0
 

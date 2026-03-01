@@ -272,14 +272,15 @@ class TestConfigModule:
         """Test that __all__ exports all required symbols."""
         from core.config import __all__
         
-        expected = ["Settings", "get_settings", "validate_api_keys", "get_llm"]
+        expected = ["Settings", "get_settings", "validate_api_keys", "get_llm", "get_openai_llm"]
         assert set(__all__) == set(expected)
 
     def test_can_import_all_symbols(self):
         """Test that all exported symbols can be imported."""
-        from core.config import Settings, get_settings, validate_api_keys, get_llm
-        
+        from core.config import Settings, get_settings, validate_api_keys, get_llm, get_openai_llm
+
         assert Settings is not None
         assert callable(get_settings)
+        assert callable(get_openai_llm)
         assert callable(validate_api_keys)
         assert callable(get_llm)

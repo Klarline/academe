@@ -326,44 +326,140 @@ class DocumentChunker:
 
         return False
 
+    # Per-type chunking profiles: (chunk_size, chunk_overlap, strategy)
+    TYPE_PROFILES = {
+        "textbook": (1200, 300, "semantic"),
+        "paper": (800, 200, "recursive"),
+        "notes": (600, 100, "recursive"),
+        "code": (1000, 150, "recursive"),
+        "general": (1000, 200, "recursive"),
+    }
+
     def adaptive_chunk(
         self,
         text: str,
         document_type: str,
         document_id: str,
-        user_id: str
+        user_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> List[DocumentChunk]:
         """
-        Adaptively chunk based on document type.
+        Adaptively chunk based on document type without mutating instance state.
+
+        Uses per-type profiles for chunk_size, overlap, and strategy.
+        Creates a temporary chunker so the caller's defaults are preserved.
 
         Args:
             text: Document text
-            document_type: Type of document (textbook, paper, notes)
+            document_type: One of textbook, paper, notes, code, general
             document_id: Document ID
             user_id: User ID
+            metadata: Optional metadata passed through to chunks
 
         Returns:
-            List of chunks
+            List of DocumentChunk objects
         """
-        # Adjust parameters based on document type
-        if document_type == "textbook":
-            # Larger chunks for textbooks
-            self.chunk_size = 1200
-            self.chunk_overlap = 300
-            self.strategy = "semantic"
-        elif document_type == "paper":
-            # Smaller chunks for papers
-            self.chunk_size = 800
-            self.chunk_overlap = 200
-            self.strategy = "recursive"
-        elif document_type == "notes":
-            # Medium chunks for notes
-            self.chunk_size = 1000
-            self.chunk_overlap = 200
-            self.strategy = "recursive"
+        size, overlap, strategy = self.TYPE_PROFILES.get(
+            document_type, self.TYPE_PROFILES["general"]
+        )
+        logger.info(
+            f"Adaptive chunking: type={document_type}, "
+            f"size={size}, overlap={overlap}, strategy={strategy}"
+        )
 
-        # Reinitialize splitters with new parameters
-        self._init_splitters()
+        tmp = DocumentChunker(chunk_size=size, chunk_overlap=overlap, strategy=strategy)
+        return tmp.chunk_document(text, document_id, user_id, metadata=metadata)
 
-        # Chunk the document
-        return self.chunk_document(text, document_id, user_id)
+    def chunk_with_parents(
+        self,
+        text: str,
+        document_id: str,
+        user_id: str,
+        parent_size: int = 1500,
+        child_size: int = 400,
+        child_overlap: int = 50,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> List[DocumentChunk]:
+        """
+        Two-level parent-child chunking.
+
+        Creates large 'parent' windows first, then splits each into smaller
+        'child' chunks that are used for retrieval.  Each child stores its
+        parent_chunk_index in metadata so the pipeline can expand to the
+        full parent at context-building time.
+
+        Args:
+            text: Document text
+            document_id: Document ID
+            user_id: User ID
+            parent_size: Target size for parent chunks
+            child_size: Target size for child retrieval chunks
+            child_overlap: Overlap between children inside a parent
+            metadata: Extra metadata for every chunk
+
+        Returns:
+            List of child DocumentChunk objects (with parent refs in metadata)
+        """
+        base_meta = metadata or {}
+
+        # Step 1: create parent chunks
+        parent_chunker = DocumentChunker(
+            chunk_size=parent_size, chunk_overlap=200, strategy="recursive"
+        )
+        parent_texts = parent_chunker.recursive_splitter.split_text(
+            parent_chunker._preprocess_text(text)
+        )
+
+        # Step 2: split each parent into children
+        child_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=child_size,
+            chunk_overlap=child_overlap,
+            length_function=len,
+            separators=["\n\n", "\n", ". ", ", ", " ", ""],
+        )
+
+        child_chunks: List[DocumentChunk] = []
+        global_idx = 0
+        for parent_idx, parent_text in enumerate(parent_texts):
+            clean_parent = self._clean_chunk_text(parent_text)
+            if not clean_parent or not clean_parent.strip():
+                continue
+
+            child_texts = child_splitter.split_text(parent_text)
+            for child_text in child_texts:
+                clean = self._clean_chunk_text(child_text)
+                if not clean or not clean.strip():
+                    continue
+
+                page_num = self._extract_page_number(child_text)
+                section = self._extract_section(child_text)
+
+                chunk_meta = {
+                    **base_meta,
+                    "parent_chunk_index": parent_idx,
+                    "parent_content": clean_parent,
+                }
+
+                child_chunks.append(
+                    DocumentChunk(
+                        document_id=document_id,
+                        user_id=user_id,
+                        chunk_index=global_idx,
+                        content=clean,
+                        page_number=page_num,
+                        section_title=section,
+                        char_count=len(clean),
+                        word_count=len(clean.split()),
+                        has_equations=self._has_equations(clean),
+                        has_code=self._has_code(clean),
+                        has_tables=self._has_tables(clean),
+                        metadata=chunk_meta,
+                    )
+                )
+                global_idx += 1
+
+        logger.info(
+            f"Parent-child chunking: {len(parent_texts)} parents → "
+            f"{len(child_chunks)} children"
+        )
+        return child_chunks
