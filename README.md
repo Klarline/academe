@@ -22,7 +22,6 @@ A production-grade, full-stack AI application that transforms how students inter
 - [Performance](#performance)
 - [Development Highlights](#development-highlights)
 - [Documentation](#documentation)
-- [Future Enhancements](#future-enhancements)
 
 ---
 
@@ -71,6 +70,11 @@ Specialized AI agents handle different tasks:
 - **Retrieval Feedback Loop**: Thumbs up/down tracking identifies weak queries and documents
 - **Proposition-Based Indexing**: Chunks decomposed into atomic factual statements for precise retrieval
 - **Knowledge Graph**: Entity-relationship extraction with multi-hop graph traversal across documents
+- **Retrieval Profiles**: Named presets (`fast` / `balanced` / `deep`) auto-selected by query complexity
+- **Request Budget**: Per-query caps on LLM calls, retries, and latency prevent cost/latency explosions
+- **Deterministic Fallback**: Ordered degradation chain for every external dependency (LLM, reranker, Pinecone)
+- **Per-Stage Value Metrics**: Tracks whether each pipeline stage changed the result, with aggregate counters
+- **Redis Response Cache**: Optional Redis-backed semantic cache that persists across restarts and multi-instance deployments
 - **Document Mode**: Answers drawn from uploaded materials with source citations
 - **Knowledge Mode**: Falls back to LLM general knowledge when documents don't cover the topic
 
@@ -113,16 +117,21 @@ Specialized AI agents handle different tasks:
 │                   Application Layer                         │
 │                  FastAPI Backend (EC2)                      │
 │  ┌────────────────────────────────────────────────────────┐ │
-│  │           LangGraph Multi-Agent System                 │ │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐              │ │
-│  │  │  Router  │→ │ Concept  │  │   Code   │              │ │
-│  │  │  Agent   │  │Explainer │  │  Helper  │              │ │
-│  │  └──────────┘  └──────────┘  └──────────┘              │ │
-│  │  ┌──────────┐  ┌──────────┐                            │ │
-│  │  │ Research │  │ Practice │                            │ │
-│  │  │  Agent   │  │Generator │                            │ │
-│  │  └──────────┘  └──────────┘                            │ │
-│  └────────────────────────────────────────────────────────┘ │
+│  │        LangGraph Multi-Agent System (Cyclic)          │ │
+│  │                                                        │ │
+│  │  ┌──────────┐    ┌─────────────┐    ┌───────────┐    │ │
+│  │  │  Router  │───▶│   Agent     │───▶│ Response  │    │ │
+│  │  │  Agent   │    │  Executor   │◀───│  Grader   │    │ │
+│  │  └──────────┘    └─────────────┘    └───────────┘    │ │
+│  │       │           (dispatches to)     ▲  │  │        │ │
+│  │       │low        ┌──────────────┐    │  │  │reroute │ │
+│  │       │conf.      │Concept│Code  │    │  │  ▼        │ │
+│  │       ▼           │Research│Prac.│  refine ┌──────┐  │ │
+│  │  ┌──────────┐    └──────────────┘    │  │Re-    │  │ │
+│  │  │ Clarify  │                        │  │Router │  │ │
+│  │  │  Query   │                        │  └──────┘  │ │
+│  │  └──────────┘                                      │ │
+│  └────────────────────────────────────────────────────┘ │
 │                           │                                 │
 │              ┌────────────┴────────────┐                    │
 │              ▼                         ▼                    │
@@ -160,14 +169,18 @@ Specialized AI agents handle different tasks:
 ### Component Interaction Flow
 
 ```
-User Query → Router → [Agent Selection] → RAG Search → Generate Response
-                ↓                              ↓
-         [Code Helper]                   [Vector DB]
-         [Concept Explainer]             [Document Chunks]
-         [Research Agent]                [Reranking]
-         [Practice Generator]                 ↓
-                ↓                         [Top K Results]
-           [Response]  ←──────────────  [Context + LLM]
+User Query → Check Docs → Router ──[confidence gate]──→ Agent Executor
+                                        │                     │
+                                   low confidence         RAG Search + LLM
+                                        │                     │
+                                        ▼                     ▼
+                                  Clarify Query        Response Grader
+                                        │              ╱     │     ╲
+                                        ▼          PASS   REFINE  REROUTE
+                                    [Response]      │       │       │
+                                                    ▼       ▼       ▼
+                                                  [END]  [Agent]  [Re-Router]
+                                                          (loop)   → Agent
 ```
 
 For detailed architecture, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -399,24 +412,34 @@ Every push triggers automated testing:
 
 The system uses **LangGraph** for state management and agent coordination:
 
-**Agent Workflow**:
-1. **Router Agent** analyzes user intent and query type
-2. Routes to specialist agent based on classification:
+**Agent Workflow** (cyclic, self-correcting):
+1. **Check Documents** — identifies whether the user has uploaded materials
+2. **Router Agent** — analyzes user intent and query type with confidence score
+3. **Confidence Gate** — if confidence < 0.4, generates a clarification question instead of guessing
+4. **Agent Executor** — dispatches to the appropriate specialist:
    - Conceptual questions → **Concept Explainer**
    - Code-related → **Code Helper**
    - Multi-source research → **Research Agent**
    - Practice/assessment → **Practice Generator**
-3. Specialist agent processes query with RAG context
-4. Response formatted and streamed to user
+5. **Response Grader** — LLM evaluates response quality (grounded? complete? correct agent?):
+   - **PASS** → return to user
+   - **REFINE** → loop back to agent with feedback (max 2 iterations)
+   - **WRONG_AGENT** → re-route to a different specialist (max 1 re-route)
+6. Response formatted and streamed to user
 
 **State Management**:
 ```python
-class AgentState(TypedDict):
-    messages: list[BaseMessage]
-    current_agent: str
-    context: dict
-    user_preferences: dict
-    conversation_history: list
+class WorkflowState(TypedDict, total=False):
+    question: str
+    user_id: str
+    route: str                        # "concept", "code", "research", "practice"
+    routing_confidence: float
+    response: str
+    refinement_count: int             # loop control (max 2)
+    reroute_count: int                # loop control (max 1)
+    grader_feedback: Optional[str]    # feedback for refinement
+    grader_verdict: Optional[str]     # "pass", "refine", "reroute"
+    previous_agents: List[str]        # agents already tried
 ```
 
 ### RAG Pipeline Implementation
@@ -542,6 +565,8 @@ class AgentState(TypedDict):
 academe/
 ├── docs/                      # Technical documentation
 │   ├── ARCHITECTURE.md        # System design and architecture
+│   ├── ARCHITECTURE_TIERS.md  # Tier 1/2/3 feature classification
+│   ├── DESIGN_DECISIONS.md    # Rationale for every major choice
 │   └── DEPLOYMENT.md          # Deployment guide
 ├── scripts/                   # Development & deployment automation
 │   ├── start_all.sh           # Start all services locally
@@ -572,10 +597,10 @@ academe/
 │   │   ├── database/          # MongoDB repositories
 │   │   ├── documents/         # Adaptive chunking, type detection, parent-child
 │   │   ├── evaluation/        # Retrieval evaluator, RAGAS, metrics tracker
-│   │   ├── graph/             # LangGraph workflow orchestration
+│   │   ├── graph/             # LangGraph cyclic workflow (router → agent → grader loop)
 │   │   ├── memory/            # Adaptive context management
 │   │   ├── models/            # Pydantic data models
-│   │   ├── rag/               # RAG pipeline implementation
+│   │   ├── rag/               # RAG pipeline, request budget, retrieval profiles
 │   │   ├── vectors/           # Embeddings & semantic search
 │   │   ├── celery_config.py   # Task queue configuration
 │   │   └── tasks.py           # Background job definitions
@@ -730,6 +755,8 @@ NEXT_PUBLIC_WS_URL=ws://localhost:8000          # WebSocket URL
 ### Guides
 
 - **[RAG Architecture](docs/RAG_ARCHITECTURE.md)** - Retrieval pipeline: hybrid search, adaptive chunking, contextual embeddings, knowledge graph, proposition indexing
+- **[Architecture Tiers](docs/ARCHITECTURE_TIERS.md)** - Feature classification into Tier 1 (baseline), Tier 2 (quality), Tier 3 (research) with profile mapping
+- **[Design Decisions](docs/DESIGN_DECISIONS.md)** - Rationale and tradeoffs for every major architectural choice
 - **[Deployment Guide](docs/DEPLOYMENT.md)** - Complete deployment instructions for AWS, MongoDB Atlas, and Vercel
 - **[Architecture Documentation](docs/ARCHITECTURE.md)** - System design, technical decisions, and data flow
 - **[Terraform README](infrastructure/terraform/README.md)** - Infrastructure as Code deployment guide

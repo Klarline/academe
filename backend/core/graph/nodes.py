@@ -515,3 +515,314 @@ async def practice_generator_node_streaming(state: WorkflowState) -> AsyncGenera
         logger.error(f"Practice generator streaming error: {e}")
         yield {"type": "token", "content": f"Error: {str(e)}", "agent": "practice_generator"}
         yield {"type": "done", "agent": "practice_generator"}
+
+
+# ==========================================
+# ENHANCED WORKFLOW NODES
+# ==========================================
+
+MAX_REFINEMENTS = 2
+MAX_REROUTES = 1
+CONFIDENCE_THRESHOLD = 0.4
+
+
+def _budget(state: WorkflowState):
+    """Return the RequestBudget attached to state, or None."""
+    return state.get("budget")
+
+
+def agent_executor_node(state: WorkflowState) -> WorkflowState:
+    """
+    Dispatcher node that calls the appropriate agent based on state["route"].
+
+    Consolidates all four agent calls behind a single graph node so that
+    the refinement loop only needs one back-edge instead of four.
+    When grader_feedback is present (refinement iteration), it is appended
+    to the question so the agent can address the feedback.
+    """
+    route = state.get("route", "concept")
+    question = state["question"]
+    user_id = state["user_id"]
+
+    feedback = state.get("grader_feedback")
+    if feedback:
+        augmented_question = (
+            f"{question}\n\n[Refinement feedback — please address this: {feedback}]"
+        )
+    else:
+        augmented_question = question
+
+    start_time = get_current_time()
+
+    try:
+        user_repo = UserRepository()
+        user = user_repo.get_user_by_id(user_id)
+
+        if route == "concept":
+            explainer = _get_concept_explainer()
+            response = explainer.explain(
+                question=augmented_question,
+                user_profile=user,
+                memory_context=state.get("memory_context"),
+            )
+        elif route == "code":
+            code_helper = _get_code_helper()
+            response = code_helper.generate_code(
+                question=augmented_question,
+                user_profile=user,
+                memory_context=state.get("memory_context"),
+            )
+        elif route == "research":
+            research_agent = ResearchAgent()
+            response = research_agent.answer_question(
+                question=augmented_question,
+                user=user,
+                use_citations=True,
+                top_k=5,
+            )
+        elif route == "practice":
+            from core.agents.practice_generator import PracticeGenerator
+
+            topic = question.lower()
+            for phrase in ["quiz me on", "practice", "give me questions about", "test me on", "give me problems on"]:
+                topic = topic.replace(phrase, "").strip()
+            num_questions = 5
+            for num in [3, 5, 10, 15, 20]:
+                if str(num) in question:
+                    num_questions = num
+                    break
+
+            practice_gen = PracticeGenerator()
+            result = practice_gen.generate_practice_set(
+                topic=topic or "general",
+                user=user,
+                num_questions=num_questions,
+                question_types=None,
+                memory_context=state.get("memory_context"),
+            )
+            if result.get("error"):
+                response = f"Error: {result['error']}"
+            else:
+                response = f"## Practice Questions: {result['topic']}\n\n"
+                for i, q in enumerate(result.get("questions", []), 1):
+                    response += f"**Question {i}** ({q['type'].upper()})\n{q['question']}\n\n"
+                    if q["type"] == "mcq" and "options" in q:
+                        for idx, opt in enumerate(q["options"], 1):
+                            response += f"{idx}. {opt}\n"
+                        response += "\n"
+                response += f"\nGenerated {len(result.get('questions', []))} questions\n"
+        else:
+            explainer = _get_concept_explainer()
+            response = explainer.explain(
+                question=augmented_question,
+                user_profile=user,
+                memory_context=state.get("memory_context"),
+            )
+
+        processing_time = (get_current_time() - start_time).total_seconds() * 1000
+
+        state["response"] = response
+        state["agent_used"] = route
+        state["processing_time_ms"] = int(processing_time)
+
+        previous = list(state.get("previous_agents") or [])
+        if route not in previous:
+            previous.append(route)
+        state["previous_agents"] = previous
+
+        logger.info(f"Agent executor ({route}) completed in {processing_time:.0f}ms")
+
+    except Exception as e:
+        logger.error(f"Agent executor ({route}) failed: {e}")
+        state["response"] = f"Error generating response: {str(e)}"
+        state["agent_used"] = route
+        state["error"] = str(e)
+
+    return state
+
+
+def response_grader_node(state: WorkflowState) -> WorkflowState:
+    """
+    Quality gate that evaluates whether the agent's response is adequate.
+
+    Uses gpt-4o-mini to judge (question, response) and emits one of:
+      PASS            — response is good, proceed to END
+      REFINE: <text>  — same agent should retry with this feedback
+      WRONG_AGENT: <route> — re-route to a different agent
+
+    Respects max-iteration limits stored in state.
+    """
+    from core.config import get_openai_llm
+
+    question = state["question"]
+    response = state.get("response", "")
+    refinement_count = state.get("refinement_count", 0)
+    reroute_count = state.get("reroute_count", 0)
+    agent_used = state.get("agent_used", "unknown")
+
+    if state.get("error"):
+        if reroute_count < MAX_REROUTES:
+            state["grader_verdict"] = "reroute"
+            state["grader_feedback"] = f"Agent '{agent_used}' errored: {state['error']}"
+            return state
+        state["grader_verdict"] = "pass"
+        return state
+
+    if refinement_count >= MAX_REFINEMENTS and reroute_count >= MAX_REROUTES:
+        logger.info("Grader: max iterations reached, accepting response")
+        state["grader_verdict"] = "pass"
+        return state
+
+    budget = _budget(state)
+    if budget and not budget.can_call_llm():
+        logger.info("Grader: budget exhausted, accepting response — %s", budget)
+        state["grader_verdict"] = "pass"
+        return state
+
+    try:
+        llm = get_openai_llm(model="gpt-4o-mini", temperature=0.0)
+        if budget:
+            budget.use_llm_call()
+
+        response_preview = response[:1500] if len(response) > 1500 else response
+
+        prompt = f"""You are a response quality judge for an academic AI assistant.
+Evaluate whether this response adequately answers the student's question.
+
+Question: {question}
+Agent used: {agent_used}
+Response (may be truncated):
+{response_preview}
+
+Consider:
+1. Does the response actually answer the question asked?
+2. Is it complete (not cut off, covers all parts of the question)?
+3. Is the agent type appropriate for this question?
+
+Respond with EXACTLY one of these formats:
+PASS
+REFINE: <specific feedback on what's missing or wrong>
+WRONG_AGENT: <better route from: concept, code, research, practice>
+
+Only use REFINE if the response is clearly incomplete or misses the point.
+Only use WRONG_AGENT if the agent type is fundamentally wrong for this question.
+Default to PASS if the response is reasonable."""
+
+        result = llm.invoke(prompt)
+        text = result.content.strip()
+
+        if text.startswith("PASS"):
+            state["grader_verdict"] = "pass"
+            logger.info("Grader: PASS")
+
+        elif text.startswith("REFINE:") and refinement_count < MAX_REFINEMENTS:
+            feedback = text[len("REFINE:"):].strip()
+            state["grader_verdict"] = "refine"
+            state["grader_feedback"] = feedback
+            state["refinement_count"] = refinement_count + 1
+            logger.info(f"Grader: REFINE ({refinement_count + 1}/{MAX_REFINEMENTS}) — {feedback[:80]}")
+
+        elif text.startswith("WRONG_AGENT:") and reroute_count < MAX_REROUTES:
+            suggested = text[len("WRONG_AGENT:"):].strip().lower()
+            valid_routes = {"concept", "code", "research", "practice"}
+            previous = state.get("previous_agents") or []
+            if suggested in valid_routes and suggested not in previous:
+                state["grader_verdict"] = "reroute"
+                state["grader_feedback"] = f"Response from '{agent_used}' used wrong approach. Re-routing to '{suggested}'."
+                state["route"] = suggested
+                state["reroute_count"] = reroute_count + 1
+                logger.info(f"Grader: WRONG_AGENT → {suggested}")
+            else:
+                state["grader_verdict"] = "pass"
+                logger.info(f"Grader: WRONG_AGENT suggested '{suggested}' but already tried or invalid, accepting")
+
+        else:
+            state["grader_verdict"] = "pass"
+            logger.info("Grader: defaulting to PASS (limits reached or unrecognised verdict)")
+
+    except Exception as e:
+        logger.warning(f"Response grading failed: {e}, defaulting to PASS")
+        state["grader_verdict"] = "pass"
+
+    return state
+
+
+def clarify_query_node(state: WorkflowState) -> WorkflowState:
+    """
+    Generates a clarification question when routing confidence is too low.
+
+    Instead of guessing, asks the user to disambiguate.
+    """
+    from core.config import get_openai_llm
+    from core.agents.router import get_agent_description
+
+    question = state["question"]
+    routing_reasoning = state.get("routing_reasoning", "")
+    route = state.get("route", "concept")
+
+    budget = _budget(state)
+    if budget and not budget.can_call_llm():
+        logger.info("Clarify: budget exhausted, using static clarification — %s", budget)
+        clarification = (
+            "I want to make sure I help you in the best way. "
+            "Could you clarify — are you looking for a concept explanation, "
+            "a code example, information from your documents, or practice questions?"
+        )
+    else:
+        try:
+            llm = get_openai_llm(model="gpt-4o-mini", temperature=0.3)
+            if budget:
+                budget.use_llm_call()
+
+            agent_options = "\n".join(
+                f"- **{r}**: {get_agent_description(r)}"
+                for r in ["concept", "code", "research", "practice"]
+            )
+
+            prompt = f"""A student asked a question, but I'm not sure which type of help they need.
+Generate a short, friendly clarification question (2-3 sentences max) that helps
+determine what kind of response they want.
+
+Student's question: "{question}"
+My best guess was: {route} ({routing_reasoning})
+
+Available assistance types:
+{agent_options}
+
+Write a clarification question that presents the most likely 2-3 options."""
+
+            result = llm.invoke(prompt)
+            clarification = result.content.strip()
+
+        except Exception as e:
+            logger.warning(f"Clarification generation failed: {e}")
+            clarification = (
+                "I want to make sure I help you in the best way. "
+                "Could you clarify — are you looking for a concept explanation, "
+                "a code example, information from your documents, or practice questions?"
+            )
+
+    state["response"] = clarification
+    state["agent_used"] = "clarify"
+    state["grader_verdict"] = "pass"
+    logger.info("Clarify node: generated clarification question")
+
+    return state
+
+
+def re_router_node(state: WorkflowState) -> WorkflowState:
+    """
+    Picks a different agent after the grader determined wrong-agent.
+
+    The grader already set the new route in state["route"]; this node
+    resets transient fields so agent_executor gets a clean slate.
+    """
+    new_route = state.get("route", "concept")
+    previous = state.get("previous_agents") or []
+
+    state["grader_feedback"] = None
+    state["error"] = None
+    state["response"] = ""
+
+    logger.info(f"Re-router: switching to '{new_route}' (previously tried: {previous})")
+    return state

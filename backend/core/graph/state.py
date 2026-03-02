@@ -7,6 +7,8 @@ Defines the state structure passed between nodes in the workflow graph.
 from typing import TypedDict, Optional, List, Dict, Any
 from datetime import datetime
 
+from core.rag.request_budget import RequestBudget
+
 
 class WorkflowState(TypedDict, total=False):
     """
@@ -25,7 +27,7 @@ class WorkflowState(TypedDict, total=False):
     document_count: int
     
     # Routing
-    route: str  # "concept", "code", "research"
+    route: str  # "concept", "code", "research", "practice"
     routing_confidence: float
     routing_reasoning: str
     
@@ -42,6 +44,16 @@ class WorkflowState(TypedDict, total=False):
     # Memory
     memory_context: Optional[Dict[str, Any]]
     
+    # Loop control (quality gate + refinement)
+    refinement_count: int
+    reroute_count: int
+    grader_feedback: Optional[str]
+    grader_verdict: Optional[str]  # "pass", "refine", "reroute"
+    previous_agents: List[str]
+    
+    # Request budget (caps LLM calls / latency per query)
+    budget: Optional[RequestBudget]
+
     # Metadata
     processing_time_ms: Optional[int]
     timestamp: Optional[datetime]

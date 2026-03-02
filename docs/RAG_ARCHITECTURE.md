@@ -138,6 +138,54 @@ MongoDB "knowledge_graph"    →  Entity-relationship triples for multi-hop reas
 In-memory cache              →  Semantic response cache (query embedding → answer)
 ```
 
+## Agent Workflow Graph (LangGraph)
+
+The LangGraph workflow wraps the RAG pipeline with a cyclic, self-correcting
+graph.  Instead of a simple `router → agent → END` path, the enhanced workflow
+adds a response quality gate with refinement loops and failure-driven
+re-routing.
+
+```
+check_documents → router → confidence_gate
+    ├── confidence < 0.4  → clarify_query → END
+    └── confidence >= 0.4 → agent_executor → response_grader
+                                 ↑                 │
+                                 │   ┌─────────────┤
+                                 │   │  PASS → END
+                                 │   │  REFINE (max 2) → agent_executor (with feedback)
+                                 │   │  WRONG_AGENT (max 1) → re_router → agent_executor
+```
+
+### Nodes
+
+| Node | File | Role |
+|------|------|------|
+| `check_documents` | `graph/nodes.py` | Sets `has_documents`, `document_count` |
+| `router` | `graph/nodes.py` | LLM-based intent classification with confidence score |
+| `clarify_query` | `graph/nodes.py` | Generates clarification question for ambiguous queries |
+| `agent_executor` | `graph/nodes.py` | Dispatcher — reads `state["route"]` and calls the right agent |
+| `response_grader` | `graph/nodes.py` | LLM (gpt-4o-mini) evaluates response quality |
+| `re_router` | `graph/nodes.py` | Picks a different agent after wrong-agent verdict |
+
+### How agent_executor calls into RAG
+
+`agent_executor` dispatches to one of four agents. Each agent internally calls
+`RAGPipeline.query_with_context()`, which runs the full 13-step retrieval
+pipeline (cache → rewrite → decompose → multi-query → hybrid search → rerank →
+self-RAG → context expansion → KG → generate → cache).
+
+The grader evaluates the final response *after* the full RAG pipeline has run.
+If the grader triggers a refinement, the agent is re-invoked with the grader's
+feedback appended to the question, causing a fresh RAG retrieval cycle.
+
+### Loop Limits
+
+- **Refinement loop**: max 2 iterations (tracked by `refinement_count`)
+- **Re-routing**: max 1 re-route (tracked by `reroute_count`)
+- **Worst-case path**: router → agent → grader → REFINE → agent → grader → REFINE → agent → grader → PASS (5 LLM calls for grading)
+
+---
+
 ## Key Files
 
 ```
@@ -150,6 +198,10 @@ backend/core/
 │   ├── self_rag.py              # RetrievalVerifier + SelfRAGController: verify → reformulate → retry
 │   ├── query_decomposer.py      # QueryDecomposer: split complex questions into sub-queries
 │   ├── feedback.py              # RetrievalFeedback: thumbs up/down, weak doc detection, stats
+│   ├── request_budget.py        # RequestBudget: per-query caps on LLM calls, retries, latency
+│   ├── retrieval_profiles.py    # Named presets (fast/balanced/deep) + auto-selection heuristic
+│   ├── fallback.py              # Deterministic fallback chain + FallbackStrategies defaults
+│   ├── stage_metrics.py         # Per-stage value metrics (RequestMetrics + AggregateMetrics)
 │   ├── proposition_indexer.py   # PropositionExtractor + PropositionRepository: atomic fact indexing
 │   └── knowledge_graph.py       # KGExtractor + KnowledgeGraphTraverser: entity-rel extraction + multi-hop
 ├── vectors/
@@ -162,6 +214,10 @@ backend/core/
 │   ├── chunker.py               # adaptive_chunk(), chunk_with_parents(), recursive/semantic
 │   ├── doc_type_detector.py     # Classify textbook/paper/notes/code/general
 │   └── storage.py               # Repos + get_adjacent_chunks() for sliding window
+├── graph/
+│   ├── state.py                 # WorkflowState with loop-control fields
+│   ├── nodes.py                 # All nodes: router, agent_executor, response_grader, clarify, re_router
+│   └── workflow.py              # Cyclic LangGraph: confidence gate, refinement loop, re-routing
 ├── config/
 │   └── llm_config.py            # LLM routing (Gemini user-facing, OpenAI infrastructure)
 └── evaluation/

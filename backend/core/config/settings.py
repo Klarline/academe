@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     session_timeout_minutes: int = 60
     max_sessions_per_user: int = 5
 
+    # Redis Configuration
+    redis_url: str = "redis://localhost:6379/0"
+
     # Celery Configuration
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
