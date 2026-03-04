@@ -238,7 +238,8 @@ class RAGPipeline:
         Returns:
             Tuple of (answer, source_chunks)
         """
-        # Step 0: Check response cache
+        # Step 0: Check response cache (compute q_embedding once; reuse for put)
+        q_embedding = None
         if self.response_cache:
             try:
                 embedding_service = self._get_embedding_service()
@@ -279,12 +280,14 @@ class RAGPipeline:
         # Generate answer with original query (not rewritten) for natural response
         answer = self._generate_answer(query, context, user)
 
-        # Cache the result
+        # Cache the result (reuse q_embedding from cache lookup to avoid double embedding)
         if self.response_cache:
             try:
-                embedding_service = self._get_embedding_service()
-                if embedding_service:
-                    q_embedding = embedding_service.generate_embedding(query)
+                if q_embedding is None:
+                    embedding_service = self._get_embedding_service()
+                    if embedding_service:
+                        q_embedding = embedding_service.generate_embedding(query)
+                if q_embedding is not None:
                     self.response_cache.put(query, q_embedding, answer, search_results)
             except Exception as e:
                 logger.debug(f"Cache put failed: {e}")
@@ -413,22 +416,39 @@ class RAGPipeline:
         user_id: str,
         top_k: int = 5,
         use_reranking: bool = True,
+        use_hyde: bool = False,
         **kwargs,
     ) -> List[DocumentSearchResult]:
-        """Use AdaptiveRetriever if available, else fall back to _search."""
-        kwargs.pop("use_hyde", None)
+        """
+        Use AdaptiveRetriever if available, else fall back to _search.
+
+        When use_hyde=True, we must use _search() which handles HyDE — the
+        AdaptiveRetriever does not support HyDE. So HyDE bypasses adaptive
+        query-type tuning but ensures HyDE actually runs.
+        """
+        if use_hyde and self.hyde:
+            return self._search(
+                query=query,
+                user_id=user_id,
+                top_k=top_k,
+                use_reranking=use_reranking,
+                use_hyde=True,
+                **kwargs,
+            )
         if self.adaptive_retriever:
             return self.adaptive_retriever.retrieve(
                 query=query,
                 user_id=user_id,
                 top_k=top_k,
                 use_reranking=use_reranking,
+                **kwargs,
             )
         return self._search(
             query=query,
             user_id=user_id,
             top_k=top_k,
             use_reranking=use_reranking,
+            **kwargs,
         )
 
     def _search_multi_query(
@@ -456,6 +476,7 @@ class RAGPipeline:
                 user_id=user_id,
                 top_k=per_variant_k,
                 use_reranking=use_reranking,
+                **kwargs,
             )
             for r in results:
                 key = f"{r.chunk.document_id}_{r.chunk.chunk_index}"
@@ -481,9 +502,7 @@ class RAGPipeline:
             return self.self_rag.search_with_verification(
                 query=query,
                 search_fn=lambda **kw: self._adaptive_or_base_search(**kw),
-                user_id=search_kwargs["user_id"],
-                top_k=search_kwargs.get("top_k", 5),
-                use_reranking=search_kwargs.get("use_reranking", True),
+                **search_kwargs,
             )
         except Exception as e:
             logger.warning(f"Self-RAG verification failed: {e}")
@@ -539,10 +558,24 @@ class RAGPipeline:
         use_reranking: bool,
         **search_kwargs,
     ) -> List[DocumentSearchResult]:
-        """Search using HyDE embedding + BM25 fusion + reranking."""
+        """
+        Search using both query and HyDE embeddings, then fuse (Option B from paper).
+
+        Instead of blindly replacing query embedding with hypothesis, we retrieve
+        with both and fuse via Reciprocal Rank Fusion (RRF). This picks the
+        better result when one embedding outperforms the other.
+        """
         from core.models.document import DocumentChunk
 
-        # Get HyDE embedding
+        # Get both embeddings (query + hypothesis)
+        embedding_service = self._get_embedding_service()
+        if not embedding_service:
+            logger.warning("No embedding service for HyDE fusion, falling back to hypothesis-only")
+            return self._search_with_hyde_hypothesis_only(
+                query, user_id, top_k, use_reranking, **search_kwargs
+            )
+
+        query_embedding = embedding_service.generate_embedding(query)
         hyde_embedding = self.hyde.get_hypothesis_embedding(query)
 
         # Get the underlying vector search components
@@ -551,14 +584,112 @@ class RAGPipeline:
         else:
             vs = self.search_service
 
-        # Vector search with HyDE embedding
+        fetch_k = top_k * 4
+
+        # Retrieve with query embedding
+        query_results = vs.pinecone_manager.search_similar_chunks(
+            user_id=user_id,
+            query_embedding=query_embedding,
+            top_k=fetch_k,
+        )
+
+        # Retrieve with hypothesis embedding
+        hyde_results = vs.pinecone_manager.search_similar_chunks(
+            user_id=user_id,
+            query_embedding=hyde_embedding,
+            top_k=fetch_k,
+        )
+
+        # Fuse via Reciprocal Rank Fusion (k=60 is standard)
+        rrf_k = 60
+        rrf_scores: Dict[str, float] = {}
+        for rank, result in enumerate(query_results, start=1):
+            vec_id = result.get("id")
+            if vec_id:
+                rrf_scores[vec_id] = rrf_scores.get(vec_id, 0) + 1.0 / (rrf_k + rank)
+        for rank, result in enumerate(hyde_results, start=1):
+            vec_id = result.get("id")
+            if vec_id:
+                rrf_scores[vec_id] = rrf_scores.get(vec_id, 0) + 1.0 / (rrf_k + rank)
+
+        # Merge result metadata (prefer first occurrence for doc/chunk info)
+        all_results = {r["id"]: r for r in query_results}
+        for r in hyde_results:
+            if r["id"] not in all_results:
+                all_results[r["id"]] = r
+
+        # Sort by fused RRF score, take top candidates
+        sorted_ids = sorted(
+            rrf_scores.keys(),
+            key=lambda vid: rrf_scores[vid],
+            reverse=True,
+        )[:fetch_k]
+
+        # Convert to DocumentSearchResult objects
+        search_results = []
+        for i, vec_id in enumerate(sorted_ids):
+            result = all_results.get(vec_id)
+            if not result or result.get("score", 0) < 0.2:
+                continue
+            parts = vec_id.split("_")
+            if len(parts) < 2:
+                continue
+            document_id = "_".join(parts[:-1])
+            chunk_index = int(parts[-1])
+            document = vs.doc_repo.get_document(document_id)
+            if not document:
+                continue
+            chunk = DocumentChunk(
+                document_id=document_id,
+                user_id=user_id,
+                chunk_index=chunk_index,
+                content=result["metadata"].get("content", ""),
+                page_number=result["metadata"].get("page_number"),
+                section_title=result["metadata"].get("section_title"),
+                char_count=len(result["metadata"].get("content", "")),
+                word_count=len(result["metadata"].get("content", "").split()),
+                has_code=result["metadata"].get("has_code", False),
+                has_equations=result["metadata"].get("has_equations", False),
+            )
+            search_results.append(
+                DocumentSearchResult(
+                    chunk=chunk,
+                    document=document,
+                    score=rrf_scores[vec_id],
+                    rank=i + 1,
+                )
+            )
+
+        # Rerank with cross-encoder using the original query
+        if use_reranking and search_results:
+            search_results = vs.rerank_results(query, search_results, top_k=top_k)
+
+        return search_results[:top_k]
+
+    def _search_with_hyde_hypothesis_only(
+        self,
+        query: str,
+        user_id: str,
+        top_k: int,
+        use_reranking: bool,
+        **search_kwargs,
+    ) -> List[DocumentSearchResult]:
+        """Fallback: use only hypothesis embedding (Option A from paper)."""
+        from core.models.document import DocumentChunk
+
+        hyde_embedding = self.hyde.get_hypothesis_embedding(query)
+
+        if isinstance(self.search_service, HybridSearchService):
+            vs = self.search_service.vector_search
+        else:
+            vs = self.search_service
+
         pinecone_results = vs.pinecone_manager.search_similar_chunks(
             user_id=user_id,
             query_embedding=hyde_embedding,
             top_k=top_k * 4,
         )
 
-        # Convert to DocumentSearchResult objects (same as SemanticSearchService.search)
         search_results = []
         for i, result in enumerate(pinecone_results):
             if result.get("score", 0) < 0.2:
@@ -588,7 +719,6 @@ class RAGPipeline:
                 DocumentSearchResult(chunk=chunk, document=document, score=result["score"], rank=i + 1)
             )
 
-        # Rerank with cross-encoder using the ORIGINAL query (not hypothesis)
         if use_reranking and search_results:
             search_results = vs.rerank_results(query, search_results, top_k=top_k)
 

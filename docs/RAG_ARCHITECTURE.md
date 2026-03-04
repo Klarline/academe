@@ -108,7 +108,18 @@ Six layers of retrieval for best precision:
 10. **Context expansion** — Sliding window (±1 adjacent chunks) or parent-child (expand child→parent)
 11. **Knowledge graph augmentation** — Multi-hop traversal from query entities through extracted triples adds related facts
 12. **LLM generation** — Answer grounded in expanded context + KG relationships
-13. **Cache result** — Store answer for future similar queries
+13. **Cache result** — Store answer for future similar queries (reuses query embedding from step 1 to avoid double embedding)
+
+### 3.1 HyDE (Hypothetical Document Embeddings)
+
+When enabled (e.g. in the `deep` retrieval profile), HyDE improves semantic retrieval by:
+
+1. **Hypothesis generation** — LLM generates a short hypothetical answer passage for the query
+2. **Dual retrieval** — Vector search with both the original query embedding and the hypothesis embedding
+3. **Reciprocal Rank Fusion (RRF)** — Merge results from both retrievals via RRF (k=60) to pick the better result when one embedding outperforms the other
+4. **Reranking** — Cross-encoder reranks the fused list using the original query
+
+HyDE bypasses AdaptiveRetriever (which does not support HyDE) and runs through `_search()` when `use_hyde=True`. The query embedding from the response cache lookup is reused for cache put to avoid redundant embedding calls.
 
 ### 4. BM25 Index Lifecycle
 

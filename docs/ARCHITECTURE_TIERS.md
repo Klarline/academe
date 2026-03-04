@@ -66,7 +66,7 @@ industry RAG systems.  Enabled in the `deep` retrieval profile.
 | Component                                   | Description                                                                                                 | Key Files                             |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------- |
 | **Query decomposition**                     | Splits multi-part questions into atomic sub-queries, retrieves independently, then merges results           | `core/rag/query_decomposer.py`        |
-| **HyDE (Hypothetical Document Embeddings)** | Generates a hypothetical answer passage and searches using its embedding for better semantic alignment      | `core/rag/query_rewriter.py` (`HyDE`) |
+| **HyDE (Hypothetical Document Embeddings)** | Generates a hypothetical answer, retrieves with both query and hypothesis embeddings, fuses via RRF for better semantic alignment | `core/rag/query_rewriter.py` (`HyDE`), `pipeline.py` (`_search_with_hyde`) |
 | **Proposition-based indexing**              | Decomposes chunks into atomic factual statements; indexes propositions alongside raw chunks                 | `core/rag/proposition_indexer.py`     |
 | **Knowledge graph**                         | Extracts entity-relationship triples, stores in graph repo, performs multi-hop traversal for richer context | `core/rag/knowledge_graph.py`         |
 
