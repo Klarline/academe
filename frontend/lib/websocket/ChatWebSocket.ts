@@ -51,8 +51,12 @@ export class ChatWebSocket {
         } else if (data.type === 'end_streaming') {
           this.messageHandlers.forEach(handler => handler({
             type: 'complete',
-            metadata: data.metadata
+            metadata: data.metadata,
+            message_id: data.message_id,
+            conversation_id: data.conversation_id
           }));
+        } else if (data.type === 'conversation_created') {
+          this.messageHandlers.forEach(handler => handler(data));
         } else if (data.type === 'start_streaming') {
           // Streaming started - no action needed
         } else if (data.type === 'error') {

@@ -130,6 +130,15 @@ class Database:
         """
         return self.get_database()["messages"]
 
+    def get_rag_responses_collection(self) -> Collection:
+        """
+        Get rag_responses collection.
+
+        Stores RAG context (query, answer, sources) keyed by message_id
+        for feedback lookup.
+        """
+        return self.get_database()["rag_responses"]
+
     def ping(self) -> bool:
         """
         Test database connection.
@@ -191,6 +200,22 @@ class Database:
             messages.create_index([("user_id", 1)])
             messages.create_index([("timestamp", -1)])
             messages.create_index([("conversation_id", 1), ("timestamp", 1)])
+
+            # RAG responses collection (message_id → query, answer, sources)
+            rag_responses = self.get_rag_responses_collection()
+            rag_responses.create_index([("message_id", 1)], unique=True)
+            rag_responses.create_index([("user_id", 1)])
+            rag_responses.create_index([("created_at", -1)])
+
+            # Retrieval feedback indexes (for analytics)
+            retrieval_feedback = self.get_database()["retrieval_feedback"]
+            retrieval_feedback.create_index([("created_at", 1)])
+            retrieval_feedback.create_index([("user_id", 1)])
+            retrieval_feedback.create_index([("user_id", 1), ("created_at", 1)])
+
+            # RAG metrics indexes (for analytics)
+            rag_metrics = self.get_database()["rag_metrics"]
+            rag_metrics.create_index([("timestamp", 1)])
 
             logger.info("Database indexes created successfully")
 

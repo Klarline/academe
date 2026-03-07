@@ -3,6 +3,8 @@ Research Agent - RAG-powered document question answering for Academe.
 
 This agent uses the RAG pipeline to answer questions based on the user's
 uploaded documents, providing citations and personalized explanations.
+When no documents are available, falls back to arXiv paper search so users
+can still get research-quality answers.
 """
 
 import logging
@@ -12,6 +14,9 @@ from core.models import UserProfile
 from core.rag import RAGPipeline
 from core.vectors import SemanticSearchService
 from core.documents import DocumentManager
+
+# Direct import — arXiv tools are in the same codebase, no MCP protocol needed
+from mcp_servers.arxiv_server import search_papers as arxiv_search_papers
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +64,9 @@ class ResearchAgent:
         # Check if user has documents
         documents = self.document_manager.get_user_documents(user.id)
         if not documents:
-            # Research agent is ONLY for documents - always show this message
-            return self._no_documents_response(question, user)
+            # No uploaded docs — fall back to arXiv for research-quality answers
+            logger.info(f"No documents for user {user.id}, falling back to arXiv")
+            return self._answer_from_arxiv(question, user)
 
         try:
             # Use RAG pipeline to get answer
@@ -79,14 +85,16 @@ class ResearchAgent:
         
         except Exception as e:
             logger.error(f"RAG query failed for question '{question}': {e}", exc_info=True)
-            return (
-                "I encountered an error searching your documents. "
-                "This might be due to:\n"
-                "• Connection issues with the vector database\n"
-                "• Document indexing problems\n"
-                "• API rate limits\n\n"
-                "Please try again in a moment, or contact support if the issue persists."
-            )
+            # RAG failed — try arXiv as fallback before giving an error
+            try:
+                logger.info("RAG failed, attempting arXiv fallback")
+                return self._answer_from_arxiv(question, user)
+            except Exception as arxiv_err:
+                logger.error(f"arXiv fallback also failed: {arxiv_err}")
+                return (
+                    "I encountered an error searching your documents and "
+                    "couldn't reach arXiv as a fallback. Please try again in a moment."
+                )
 
     def research_topic(
         self,
@@ -336,17 +344,78 @@ Be {user.explanation_style.value} in your feedback."""
         except Exception as e:
             return f"Unable to evaluate understanding: {str(e)}"
 
+    def _answer_from_arxiv(
+        self,
+        question: str,
+        user: UserProfile,
+        max_papers: int = 3,
+    ) -> str:
+        """
+        Generate an answer using arXiv papers when local documents are unavailable.
+
+        Searches arXiv for relevant papers, then uses the LLM to synthesize
+        an answer from the abstracts with proper citations.
+
+        Args:
+            question: User's question.
+            max_papers: Number of papers to retrieve (1-5).
+
+        Returns:
+            LLM-generated answer grounded in arXiv abstracts.
+        """
+        papers = arxiv_search_papers(question, max_results=max_papers)
+
+        # Handle arXiv errors or empty results
+        if not papers or "error" in papers[0] or "message" in papers[0]:
+            return self._no_documents_response(question, user)
+
+        # Build context from abstracts
+        context_parts: List[str] = []
+        for i, p in enumerate(papers, 1):
+            authors = ", ".join(p.get("authors", [])[:3])
+            if len(p.get("authors", [])) > 3:
+                authors += " et al."
+            context_parts.append(
+                f"[{i}] {p['title']} ({p.get('published', 'n.d.')})\n"
+                f"    Authors: {authors}\n"
+                f"    Abstract: {p.get('abstract', 'No abstract available.')}"
+            )
+        context = "\n\n".join(context_parts)
+
+        prompt = (
+            f"Answer the following question using ONLY the provided arXiv paper "
+            f"abstracts as context. Cite papers by their number [1], [2], etc. "
+            f"If the abstracts don't contain enough information, say so.\n\n"
+            f"Question: {question}\n\n"
+            f"Papers:\n{context}\n\n"
+            f"Adapt the explanation to the user's learning level: "
+            f"{user.learning_level.value}. "
+            f"Style: {user.explanation_style.value}."
+        )
+
+        try:
+            llm = get_llm(temperature=0.7)
+            response = llm.invoke(prompt)
+            answer = response.content if hasattr(response, "content") else str(response)
+        except Exception as e:
+            logger.error(f"LLM generation from arXiv context failed: {e}")
+            return self._no_documents_response(question, user)
+
+        # Append arXiv citations
+        citations = "\n\n📄 Sources (arXiv):\n"
+        for i, p in enumerate(papers, 1):
+            citations += f"[{i}] {p['title']} — {p.get('arxiv_url', '')}\n"
+
+        return answer + citations
+
     def _no_documents_response(self, question: str, user: UserProfile) -> str:
-        """Generate response when user has no documents."""
+        """Generate response when neither documents nor arXiv are available."""
         return (
-            "📚 You haven't uploaded any documents yet!\n\n"
-            "To use the research features, please upload your study materials "
-            "(PDFs, notes, textbooks) first. Once uploaded, I can:\n"
-            "• Answer questions from your documents\n"
-            "• Provide summaries and explanations\n"
-            "• Find examples and related concepts\n"
-            "• Generate practice problems\n\n"
-            "Use the 'Upload Document' option from the main menu to get started."
+            "📚 You haven't uploaded any documents yet, and I couldn't find "
+            "relevant papers on arXiv for your question.\n\n"
+            "To get the best answers, upload your study materials "
+            "(PDFs, notes, textbooks). I can also search arXiv for published "
+            "research — try rephrasing your question with more specific terms."
         )
 
     def _add_citations(self, answer: str, sources: List[Any]) -> str:
@@ -427,7 +496,38 @@ async def research_streaming(
     documents = doc_manager.get_user_documents(user_profile.id)
     
     if not documents:
-        yield "📚 You haven't uploaded any documents yet! Please upload your study materials to use the research features."
+        # Fall back to arXiv — stream the answer
+        try:
+            papers = arxiv_search_papers(question, max_results=3)
+            if not papers or "error" in papers[0] or "message" in papers[0]:
+                yield "📚 No documents uploaded and no relevant arXiv papers found. Try uploading your materials or rephrasing your question."
+                return
+
+            context_parts = []
+            for i, p in enumerate(papers, 1):
+                authors = ", ".join(p.get("authors", [])[:3])
+                context_parts.append(f"[{i}] {p['title']} ({p.get('published', 'n.d.')})\n    Abstract: {p.get('abstract', '')}")
+            context = "\n\n".join(context_parts)
+
+            prompt = (
+                f"Answer using ONLY these arXiv paper abstracts. Cite by number [1], [2].\n\n"
+                f"Question: {question}\n\nPapers:\n{context}\n\n"
+                f"Learning level: {user_profile.learning_level.value}"
+            )
+
+            llm = get_llm(temperature=0.7)
+            async for chunk in llm.astream(prompt):
+                if hasattr(chunk, "content") and chunk.content:
+                    yield chunk.content
+
+            # Append citations
+            citations = "\n\n📄 Sources (arXiv):\n"
+            for i, p in enumerate(papers, 1):
+                citations += f"[{i}] {p['title']} — {p.get('arxiv_url', '')}\n"
+            yield citations
+        except Exception as e:
+            logger.error(f"arXiv streaming fallback failed: {e}")
+            yield "📚 No documents uploaded and arXiv search failed. Please upload your study materials or try again."
         return
     
     # Use RAG to get context

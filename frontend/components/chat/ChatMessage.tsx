@@ -2,6 +2,7 @@ import React from 'react';
 import { ChatMessage as ChatMessageType } from '@/types/chat';
 import AgentBadge from './AgentBadge';
 import MessageContent from './renderers/MessageContent';
+import FeedbackButtons from './FeedbackButtons';
 import { formatMessageTime } from '@/lib/utils';
 import { User } from 'lucide-react';
 
@@ -50,6 +51,11 @@ export default function ChatMessage({ message }: ChatMessageProps) {
             <MessageContent content={message.content} />
           </div>
         </div>
+
+        {/* Feedback buttons for assistant messages */}
+        {!isUser && message.id && (
+          <FeedbackButtons messageId={message.id} />
+        )}
 
         {/* User timestamp */}
         {isUser && (

@@ -44,6 +44,17 @@ export interface SendMessageResponse {
   metadata?: MessageMetadata;
 }
 
+export interface FeedbackRequest {
+  message_id: string;
+  rating: 1 | -1;
+  comment?: string;
+}
+
+export interface FeedbackResponse {
+  success: boolean;
+  feedback_id?: string;
+}
+
 export interface StreamingMessage {
   type: 'token' | 'metadata' | 'complete';
   content?: string;

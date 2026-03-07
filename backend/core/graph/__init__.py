@@ -5,6 +5,7 @@ Contains the LangGraph workflow that coordinates all agents.
 """
 
 from .state import WorkflowState
+from .decision_context import DecisionContext
 from core.rag.request_budget import RequestBudget
 from .nodes import (
     check_documents_node,
@@ -28,6 +29,7 @@ from .workflow import (
 __all__ = [
     # State
     "WorkflowState",
+    "DecisionContext",
     "RequestBudget",
 
     # Legacy individual agent nodes

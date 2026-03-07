@@ -7,6 +7,7 @@ from .response_cache import SemanticResponseCache, RedisResponseCache
 from .self_rag import SelfRAGController, RetrievalVerifier
 from .query_decomposer import QueryDecomposer
 from .feedback import RetrievalFeedback
+from .analytics import RAGAnalytics
 from .request_budget import RequestBudget
 from .fallback import fallback, with_fallback, FallbackStrategies, FallbackExhausted
 from .stage_metrics import RequestMetrics, AggregateMetrics, get_aggregate_metrics
@@ -37,6 +38,7 @@ __all__ = [
     "RetrievalVerifier",
     "QueryDecomposer",
     "RetrievalFeedback",
+    "RAGAnalytics",
     "RequestBudget",
     "PropositionExtractor",
     "PropositionRepository",

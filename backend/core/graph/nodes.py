@@ -97,27 +97,32 @@ def router_node(state: WorkflowState) -> WorkflowState:
     question = state["question"]
     has_documents = state.get("has_documents", False)
     
+    ctx = _decision(state)
+
     try:
         # Route with structured output
         decision = route_query_structured(question, has_documents)
-        
-        # Update state
-        state["route"] = decision.route
-        state["routing_confidence"] = decision.confidence
-        state["routing_reasoning"] = decision.reasoning
+
+        ctx.record_routing(
+            route=decision.route,
+            confidence=decision.confidence,
+            reasoning=decision.reasoning,
+        )
         state["timestamp"] = get_current_time()
-        
+
         logger.info(f"Router decision: {decision.route} (confidence: {decision.confidence:.2f})")
         logger.info(f"Router reasoning: {decision.reasoning}")
-        logger.info(f"STATE ROUTE SET TO: {state['route']}")
-        
+
     except Exception as e:
         logger.error(f"Routing failed: {e}, defaulting to concept")
-        state["route"] = "concept"
-        state["routing_confidence"] = 0.5
-        state["routing_reasoning"] = f"Fallback due to error: {str(e)}"
+        ctx.record_routing(
+            route="concept",
+            confidence=0.5,
+            reasoning=f"Fallback due to error: {str(e)}",
+        )
         state["timestamp"] = get_current_time()
-    
+
+    _sync_decision_to_state(state)
     return state
 
 
@@ -521,14 +526,50 @@ async def practice_generator_node_streaming(state: WorkflowState) -> AsyncGenera
 # ENHANCED WORKFLOW NODES
 # ==========================================
 
-MAX_REFINEMENTS = 2
-MAX_REROUTES = 1
-CONFIDENCE_THRESHOLD = 0.4
+from core.graph.decision_context import (
+    DecisionContext,
+    MAX_REFINEMENTS,
+    MAX_REROUTES,
+    CONFIDENCE_THRESHOLD,
+)
 
 
 def _budget(state: WorkflowState):
     """Return the RequestBudget attached to state, or None."""
     return state.get("budget")
+
+
+def _decision(state: WorkflowState) -> DecisionContext:
+    """Return the DecisionContext attached to state, creating one if absent."""
+    ctx = state.get("decision")
+    if ctx is None:
+        ctx = DecisionContext(
+            route=state.get("route", "concept"),
+            routing_confidence=state.get("routing_confidence", 1.0),
+            routing_reasoning=state.get("routing_reasoning", ""),
+            refinement_count=state.get("refinement_count", 0),
+            reroute_count=state.get("reroute_count", 0),
+            previous_agents=list(state.get("previous_agents") or []),
+            grader_verdict=state.get("grader_verdict"),
+            grader_feedback=state.get("grader_feedback"),
+        )
+        state["decision"] = ctx
+    return ctx
+
+
+def _sync_decision_to_state(state: WorkflowState) -> None:
+    """Copy DecisionContext fields back to legacy state fields for compatibility."""
+    ctx = state.get("decision")
+    if ctx is None:
+        return
+    state["route"] = ctx.route
+    state["routing_confidence"] = ctx.routing_confidence
+    state["routing_reasoning"] = ctx.routing_reasoning
+    state["grader_verdict"] = ctx.grader_verdict
+    state["grader_feedback"] = ctx.grader_feedback
+    state["refinement_count"] = ctx.refinement_count
+    state["reroute_count"] = ctx.reroute_count
+    state["previous_agents"] = list(ctx.previous_agents)
 
 
 def agent_executor_node(state: WorkflowState) -> WorkflowState:
@@ -540,11 +581,12 @@ def agent_executor_node(state: WorkflowState) -> WorkflowState:
     When grader_feedback is present (refinement iteration), it is appended
     to the question so the agent can address the feedback.
     """
-    route = state.get("route", "concept")
+    ctx = _decision(state)
+    route = ctx.route
     question = state["question"]
     user_id = state["user_id"]
 
-    feedback = state.get("grader_feedback")
+    feedback = ctx.grader_feedback
     if feedback:
         augmented_question = (
             f"{question}\n\n[Refinement feedback — please address this: {feedback}]"
@@ -611,6 +653,7 @@ def agent_executor_node(state: WorkflowState) -> WorkflowState:
                             response += f"{idx}. {opt}\n"
                         response += "\n"
                 response += f"\nGenerated {len(result.get('questions', []))} questions\n"
+                state["metadata"] = {"sources": result.get("sources", [])}
         else:
             explainer = _get_concept_explainer()
             response = explainer.explain(
@@ -625,10 +668,7 @@ def agent_executor_node(state: WorkflowState) -> WorkflowState:
         state["agent_used"] = route
         state["processing_time_ms"] = int(processing_time)
 
-        previous = list(state.get("previous_agents") or [])
-        if route not in previous:
-            previous.append(route)
-        state["previous_agents"] = previous
+        ctx.record_agent_used(route)
 
         logger.info(f"Agent executor ({route}) completed in {processing_time:.0f}ms")
 
@@ -638,6 +678,7 @@ def agent_executor_node(state: WorkflowState) -> WorkflowState:
         state["agent_used"] = route
         state["error"] = str(e)
 
+    _sync_decision_to_state(state)
     return state
 
 
@@ -654,29 +695,30 @@ def response_grader_node(state: WorkflowState) -> WorkflowState:
     """
     from core.config import get_openai_llm
 
+    ctx = _decision(state)
     question = state["question"]
     response = state.get("response", "")
-    refinement_count = state.get("refinement_count", 0)
-    reroute_count = state.get("reroute_count", 0)
     agent_used = state.get("agent_used", "unknown")
 
     if state.get("error"):
-        if reroute_count < MAX_REROUTES:
-            state["grader_verdict"] = "reroute"
-            state["grader_feedback"] = f"Agent '{agent_used}' errored: {state['error']}"
-            return state
-        state["grader_verdict"] = "pass"
+        if ctx.can_reroute:
+            ctx.record_grading("reroute", f"Agent '{agent_used}' errored: {state['error']}")
+        else:
+            ctx.record_grading("pass")
+        _sync_decision_to_state(state)
         return state
 
-    if refinement_count >= MAX_REFINEMENTS and reroute_count >= MAX_REROUTES:
+    if ctx.loops_exhausted:
         logger.info("Grader: max iterations reached, accepting response")
-        state["grader_verdict"] = "pass"
+        ctx.record_grading("pass")
+        _sync_decision_to_state(state)
         return state
 
     budget = _budget(state)
     if budget and not budget.can_call_llm():
         logger.info("Grader: budget exhausted, accepting response — %s", budget)
-        state["grader_verdict"] = "pass"
+        ctx.record_grading("pass")
+        _sync_decision_to_state(state)
         return state
 
     try:
@@ -712,38 +754,34 @@ Default to PASS if the response is reasonable."""
         text = result.content.strip()
 
         if text.startswith("PASS"):
-            state["grader_verdict"] = "pass"
+            ctx.record_grading("pass")
             logger.info("Grader: PASS")
 
-        elif text.startswith("REFINE:") and refinement_count < MAX_REFINEMENTS:
+        elif text.startswith("REFINE:") and ctx.can_refine:
             feedback = text[len("REFINE:"):].strip()
-            state["grader_verdict"] = "refine"
-            state["grader_feedback"] = feedback
-            state["refinement_count"] = refinement_count + 1
-            logger.info(f"Grader: REFINE ({refinement_count + 1}/{MAX_REFINEMENTS}) — {feedback[:80]}")
+            ctx.record_grading("refine", feedback)
+            logger.info(f"Grader: REFINE ({ctx.refinement_count}/{ctx.max_refinements}) — {feedback[:80]}")
 
-        elif text.startswith("WRONG_AGENT:") and reroute_count < MAX_REROUTES:
+        elif text.startswith("WRONG_AGENT:") and ctx.can_reroute:
             suggested = text[len("WRONG_AGENT:"):].strip().lower()
             valid_routes = {"concept", "code", "research", "practice"}
-            previous = state.get("previous_agents") or []
-            if suggested in valid_routes and suggested not in previous:
-                state["grader_verdict"] = "reroute"
-                state["grader_feedback"] = f"Response from '{agent_used}' used wrong approach. Re-routing to '{suggested}'."
-                state["route"] = suggested
-                state["reroute_count"] = reroute_count + 1
+            if suggested in valid_routes and ctx.is_route_untried(suggested):
+                ctx.record_grading("reroute", f"Response from '{agent_used}' used wrong approach. Re-routing to '{suggested}'.")
+                ctx.route = suggested
                 logger.info(f"Grader: WRONG_AGENT → {suggested}")
             else:
-                state["grader_verdict"] = "pass"
+                ctx.record_grading("pass")
                 logger.info(f"Grader: WRONG_AGENT suggested '{suggested}' but already tried or invalid, accepting")
 
         else:
-            state["grader_verdict"] = "pass"
+            ctx.record_grading("pass")
             logger.info("Grader: defaulting to PASS (limits reached or unrecognised verdict)")
 
     except Exception as e:
         logger.warning(f"Response grading failed: {e}, defaulting to PASS")
-        state["grader_verdict"] = "pass"
+        ctx.record_grading("pass")
 
+    _sync_decision_to_state(state)
     return state
 
 
@@ -756,9 +794,10 @@ def clarify_query_node(state: WorkflowState) -> WorkflowState:
     from core.config import get_openai_llm
     from core.agents.router import get_agent_description
 
+    ctx = _decision(state)
     question = state["question"]
-    routing_reasoning = state.get("routing_reasoning", "")
-    route = state.get("route", "concept")
+    routing_reasoning = ctx.routing_reasoning
+    route = ctx.route
 
     budget = _budget(state)
     if budget and not budget.can_call_llm():
@@ -817,12 +856,13 @@ def re_router_node(state: WorkflowState) -> WorkflowState:
     The grader already set the new route in state["route"]; this node
     resets transient fields so agent_executor gets a clean slate.
     """
-    new_route = state.get("route", "concept")
-    previous = state.get("previous_agents") or []
+    ctx = _decision(state)
+    new_route = ctx.route
 
-    state["grader_feedback"] = None
+    ctx.record_reroute(new_route)
     state["error"] = None
     state["response"] = ""
 
-    logger.info(f"Re-router: switching to '{new_route}' (previously tried: {previous})")
+    _sync_decision_to_state(state)
+    logger.info(f"Re-router: switching to '{new_route}' (previously tried: {ctx.previous_agents})")
     return state

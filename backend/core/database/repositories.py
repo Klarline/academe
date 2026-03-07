@@ -2,9 +2,10 @@
 
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
+from bson.errors import InvalidId
 from pymongo.errors import DuplicateKeyError, OperationFailure
 
 from core.utils import get_current_time
@@ -361,7 +362,16 @@ class ConversationRepository:
             True if deleted successfully
         """
         try:
-            # Delete all messages first
+            # Get message IDs before deletion for rag_responses cleanup
+            messages = self.get_conversation_messages(conversation_id)
+            message_ids = [str(m.id) for m in messages if m.id]
+
+            # Delete rag_responses for these messages
+            if message_ids:
+                rag_responses = self.db.get_rag_responses_collection()
+                rag_responses.delete_many({"message_id": {"$in": message_ids}})
+
+            # Delete all messages
             messages_collection = self.db.get_messages_collection()
             messages_collection.delete_many({"conversation_id": conversation_id})
 
@@ -418,6 +428,87 @@ class ConversationRepository:
         except Exception as e:
             logger.error(f"Failed to add message: {e}")
             raise
+
+    def get_message_by_id(self, message_id: str) -> Optional[Message]:
+        """
+        Get a message by its ID.
+
+        Args:
+            message_id: Message ID (MongoDB ObjectId string)
+
+        Returns:
+            Message if found, None otherwise
+        """
+        try:
+            collection = self.db.get_messages_collection()
+            msg_dict = collection.find_one({"_id": ObjectId(message_id)})
+            if msg_dict:
+                return Message.from_mongo_dict(msg_dict)
+            return None
+        except (InvalidId, TypeError):
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get message by id: {e}")
+            raise
+
+    def save_rag_response(
+        self,
+        message_id: str,
+        user_id: str,
+        query: str,
+        answer: str,
+        sources: List[Dict[str, Any]],
+        agent_used: str,
+        route: str,
+    ) -> None:
+        """
+        Save RAG context for a message (for feedback lookup).
+
+        Args:
+            message_id: Assistant message ID
+            user_id: User ID
+            query: User's question
+            answer: Assistant's response
+            sources: Source info dicts (document, page, score, excerpt)
+            agent_used: Agent that handled the query
+            route: Route taken
+        """
+        try:
+            collection = self.db.get_rag_responses_collection()
+            doc = {
+                "message_id": message_id,
+                "user_id": user_id,
+                "query": query,
+                "answer": answer,
+                "sources": sources[:5] if sources else [],
+                "agent_used": agent_used,
+                "route": route,
+                "created_at": get_current_time(),
+            }
+            collection.insert_one(doc)
+            logger.debug(f"Saved rag_response for message {message_id}")
+        except Exception as e:
+            logger.error(f"Failed to save rag_response: {e}")
+
+    def get_rag_response_by_message_id(
+        self, message_id: str
+    ) -> Optional[Dict]:
+        """
+        Get RAG response context by message ID.
+
+        Returns:
+            Dict with query, answer, sources, user_id, etc. or None
+        """
+        try:
+            collection = self.db.get_rag_responses_collection()
+            doc = collection.find_one({"message_id": message_id})
+            if doc:
+                doc.pop("_id", None)
+                return doc
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get rag_response: {e}")
+            return None
 
     def get_conversation_messages(
         self,

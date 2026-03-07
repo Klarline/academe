@@ -51,7 +51,9 @@ default in the `balanced` retrieval profile.
 | **Query rewriting**              | LLM resolves pronouns and expands abbreviations using conversation history                                          | `core/rag/query_rewriter.py`                    |
 | **Multi-query expansion**        | Generates alternative phrasings of the same query for broader recall                                                | `core/rag/query_rewriter.py`                    |
 | **Self-RAG (corrective RAG)**    | LLM judge verifies whether retrieved context is sufficient; reformulates and retries if not                         | `core/rag/self_rag.py`                          |
-| **Retrieval feedback loop**      | Implicit signal from user interactions used to re-weight future results                                             | `core/rag/feedback.py`                          |
+| **Retrieval feedback loop**      | End-to-end: frontend thumbs up/down → feedback API → MongoDB → analytics                                           | `core/rag/feedback.py`, `api/v1/endpoints/chat.py`, `FeedbackButtons.tsx` |
+| **RAG analytics (Pandas)**       | MongoDB aggregation + Pandas for satisfaction trends, weak doc detection, query type performance                    | `core/rag/analytics.py`, `api/v1/endpoints/analytics.py` |
+| **arXiv fallback**               | Research agent searches arXiv papers when no documents uploaded or RAG retrieval fails                              | `core/agents/research_agent.py`, `mcp_servers/arxiv_server.py` |
 | **Streaming responses**          | Token-by-token SSE streaming with per-agent progress events                                                         | `core/graph/workflow.py`, `backend/api/routes/` |
 
 
@@ -66,9 +68,10 @@ industry RAG systems.  Enabled in the `deep` retrieval profile.
 | Component                                   | Description                                                                                                 | Key Files                             |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------- |
 | **Query decomposition**                     | Splits multi-part questions into atomic sub-queries, retrieves independently, then merges results           | `core/rag/query_decomposer.py`        |
-| **HyDE (Hypothetical Document Embeddings)** | Generates a hypothetical answer, retrieves with both query and hypothesis embeddings, fuses via RRF for better semantic alignment | `core/rag/query_rewriter.py` (`HyDE`), `pipeline.py` (`_search_with_hyde`) |
+| **HyDE (Hypothetical Document Embeddings)** | Three-way RRF: vector(query) + vector(hypothesis) + BM25(query). Composes with CODE filter and COMPARISON diversification. | `core/rag/query_rewriter.py` (`HyDE`), `pipeline.py` (`_search_with_hyde`) |
 | **Proposition-based indexing**              | Decomposes chunks into atomic factual statements; indexes propositions alongside raw chunks                 | `core/rag/proposition_indexer.py`     |
 | **Knowledge graph**                         | Extracts entity-relationship triples, stores in graph repo, performs multi-hop traversal for richer context | `core/rag/knowledge_graph.py`         |
+| **arXiv MCP server**                        | Standalone MCP tool server for external clients; internally accessed via direct import in research agent    | `mcp_servers/arxiv_server.py`         |
 
 
 ---

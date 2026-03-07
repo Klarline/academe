@@ -71,6 +71,19 @@ class ConversationCreateRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
 
 
+class FeedbackRequest(BaseModel):
+    """Feedback on a chat response (thumbs up/down)."""
+    message_id: str = Field(..., min_length=1)
+    rating: int = Field(..., ge=-1, le=1)  # 1 = thumbs up, -1 = thumbs down
+    comment: Optional[str] = Field(None, max_length=1000)
+
+
+class FeedbackResponse(BaseModel):
+    """Feedback submission response."""
+    success: bool
+    feedback_id: Optional[str] = None
+
+
 @router.post("/message", response_model=ChatResponse)
 async def send_message(
     request: ChatRequest,
@@ -132,13 +145,27 @@ async def send_message(
             content=response_data["content"]
         )
         message_id = conv_repo.add_message(assistant_message)
+
+        # Save RAG context for feedback lookup
+        sources = response_data.get("sources") or []
+        conv_repo.save_rag_response(
+            message_id=message_id,
+            user_id=current_user_id,
+            query=request.message,
+            answer=response_data["content"],
+            sources=sources,
+            agent_used=response_data.get("agent_used") or "concept_explainer",
+            route=response_data.get("route") or "concept",
+        )
         
         # Update conversation timestamp
         conv_repo.update_conversation(conversation_id, {
             "updated_at": get_current_time()
         })
         
-        logger.info(f"Message processed for user {current_user_id}, agent: {response_data.get('agent_used')}")
+        logger.info(
+            f"Message processed for user {current_user_id}, agent: {response_data.get('agent_used')}"
+        )
         
         return ChatResponse(
             id=message_id,
@@ -398,5 +425,42 @@ async def delete_conversation(
         )
     
     logger.info(f"Conversation deleted: {conversation_id}")
-    
+
     return {"message": "Conversation deleted successfully"}
+
+
+@router.post("/feedback", response_model=FeedbackResponse)
+async def submit_feedback(
+    request: FeedbackRequest,
+    current_user_id: str = Depends(get_current_user_id)
+) -> Any:
+    """
+    Submit feedback (thumbs up/down) on a chat response.
+
+    Looks up RAG context by message_id and records feedback for retrieval quality analysis.
+    """
+    rag_response = conv_repo.get_rag_response_by_message_id(request.message_id)
+    if not rag_response:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found or feedback not available for this message"
+        )
+    if rag_response.get("user_id") != current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to submit feedback for this message"
+        )
+
+    from core.rag.feedback import RetrievalFeedback
+
+    feedback = RetrievalFeedback()
+    feedback_id = feedback.record(
+        user_id=current_user_id,
+        query=rag_response["query"],
+        answer=rag_response["answer"],
+        sources=rag_response.get("sources", []),
+        rating=request.rating,
+        comment=request.comment,
+    )
+
+    return FeedbackResponse(success=bool(feedback_id), feedback_id=feedback_id or None)

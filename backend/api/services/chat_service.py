@@ -100,6 +100,12 @@ class ChatService:
             except Exception as e:
                 logger.warning(f"Failed to log study session: {e}")
 
+            # Extract sources from state (practice sets metadata.sources; others may have state["sources"])
+            sources = result.get("sources") or result.get("metadata", {}).get("sources") or []
+            # Normalize: strings -> [{"document": s}]; dicts passed through
+            if sources and isinstance(sources[0], str):
+                sources = [{"document": s} for s in sources]
+
             return {
                 "content": result.get("response", ""),
                 "agent_used": result.get("agent"),
@@ -108,8 +114,10 @@ class ChatService:
                     "agent": result.get("agent"),
                     "route": result.get("route"),
                     "has_documents": result.get("has_documents", False),
-                    "used_memory": use_memory
-                }
+                    "used_memory": use_memory,
+                    "sources": sources,
+                },
+                "sources": sources,
             }
 
         except Exception as e:

@@ -78,7 +78,8 @@ export const API_ENDPOINTS = {
     MESSAGE_STREAM: '/api/v1/chat/message/stream',
     CONVERSATIONS: '/api/v1/chat/conversations',
     CONVERSATION: (id: string) => `/api/v1/chat/conversations/${id}`,
-    MESSAGES: (id: string) => `/api/v1/chat/conversations/${id}/messages`
+    MESSAGES: (id: string) => `/api/v1/chat/conversations/${id}/messages`,
+    FEEDBACK: '/api/v1/chat/feedback'
   },
   DOCUMENTS: {
     UPLOAD: '/api/v1/documents/upload',

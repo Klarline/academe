@@ -44,19 +44,44 @@ class TestResearchAgentAnswerQuestion:
     def test_should_return_no_documents_message_when_user_has_no_docs(
         self, mock_rag_pipeline, mock_document_manager_empty, sample_user
     ):
-        """Should return helpful message when user has no documents."""
+        """Should fall back to arXiv, then show message if arXiv also fails."""
         agent = ResearchAgent(
             rag_pipeline=mock_rag_pipeline,
             document_manager=mock_document_manager_empty
         )
-        
-        result = agent.answer_question(
-            question="What is in my documents?",
-            user=sample_user
-        )
-        
+
+        # arXiv returns no results → falls through to _no_documents_response
+        with patch('core.agents.research_agent.arxiv_search_papers', return_value=[{"message": "No papers found"}]):
+            result = agent.answer_question(
+                question="What is in my documents?",
+                user=sample_user
+            )
+
         assert "haven't uploaded any documents" in result
-        assert "upload" in result.lower()
+
+    def test_should_use_arxiv_fallback_when_no_documents(
+        self, mock_rag_pipeline, mock_document_manager_empty, sample_user
+    ):
+        """Should return arXiv-based answer when user has no documents but arXiv has results."""
+        agent = ResearchAgent(
+            rag_pipeline=mock_rag_pipeline,
+            document_manager=mock_document_manager_empty
+        )
+
+        fake_papers = [
+            {"title": "RAG Survey", "authors": ["Author A"], "abstract": "About RAG.",
+             "published": "2024-01-01", "arxiv_url": "https://arxiv.org/abs/1234"}
+        ]
+        with patch('core.agents.research_agent.arxiv_search_papers', return_value=fake_papers), \
+             patch('core.agents.research_agent.get_llm') as mock_llm_fn:
+            mock_llm = Mock()
+            mock_llm.invoke.return_value = Mock(content="RAG is a technique...")
+            mock_llm_fn.return_value = mock_llm
+
+            result = agent.answer_question(question="What is RAG?", user=sample_user)
+
+        assert "RAG is a technique" in result
+        assert "📄 Sources (arXiv)" in result
     
     def test_should_query_rag_when_user_has_documents(
         self, mock_rag_pipeline_with_sources, mock_document_manager_with_docs, sample_user
@@ -164,7 +189,7 @@ class TestResearchAgentEdgeCases:
     def test_should_handle_rag_failure_gracefully(
         self, mock_document_manager_with_docs, sample_user
     ):
-        """Should return friendly error message when RAG fails."""
+        """Should try arXiv fallback when RAG fails, then return error if both fail."""
         mock_rag = Mock()
         mock_rag.query_with_context.side_effect = Exception("RAG error")
         
@@ -172,11 +197,38 @@ class TestResearchAgentEdgeCases:
             rag_pipeline=mock_rag,
             document_manager=mock_document_manager_with_docs
         )
+
+        # arXiv also fails → should return friendly error
+        with patch('core.agents.research_agent.arxiv_search_papers', side_effect=Exception("Network error")):
+            result = agent.answer_question("What is PCA?", sample_user)
         
-        # Should NOT raise exception, should return friendly message
-        result = agent.answer_question("What is PCA?", sample_user)
-        
-        # Should return error message string
         assert isinstance(result, str)
         assert "error" in result.lower()
         assert "try again" in result.lower()
+
+    def test_should_use_arxiv_when_rag_fails(
+        self, mock_document_manager_with_docs, sample_user
+    ):
+        """Should fall back to arXiv successfully when RAG pipeline errors."""
+        mock_rag = Mock()
+        mock_rag.query_with_context.side_effect = Exception("RAG error")
+
+        agent = ResearchAgent(
+            rag_pipeline=mock_rag,
+            document_manager=mock_document_manager_with_docs
+        )
+
+        fake_papers = [
+            {"title": "PCA Explained", "authors": ["Auth"], "abstract": "PCA reduces dimensions.",
+             "published": "2024-01-01", "arxiv_url": "https://arxiv.org/abs/5678"}
+        ]
+        with patch('core.agents.research_agent.arxiv_search_papers', return_value=fake_papers), \
+             patch('core.agents.research_agent.get_llm') as mock_llm_fn:
+            mock_llm = Mock()
+            mock_llm.invoke.return_value = Mock(content="PCA is a dimensionality reduction method.")
+            mock_llm_fn.return_value = mock_llm
+
+            result = agent.answer_question("What is PCA?", sample_user)
+
+        assert "PCA" in result
+        assert "📄 Sources (arXiv)" in result

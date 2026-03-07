@@ -22,6 +22,7 @@ from typing import Literal, AsyncGenerator, Dict, Any
 from langgraph.graph import StateGraph, END
 
 from core.graph.state import WorkflowState
+from core.graph.decision_context import DecisionContext, CONFIDENCE_THRESHOLD
 from core.rag.request_budget import RequestBudget
 from core.graph.nodes import (
     check_documents_node,
@@ -30,7 +31,6 @@ from core.graph.nodes import (
     response_grader_node,
     clarify_query_node,
     re_router_node,
-    CONFIDENCE_THRESHOLD,
     # Legacy individual nodes kept for streaming path
     concept_explainer_node_streaming,
     code_helper_node_streaming,
@@ -45,6 +45,11 @@ logger = logging.getLogger(__name__)
 
 def confidence_gate(state: WorkflowState) -> Literal["proceed", "clarify"]:
     """Route based on routing confidence: low → clarify, sufficient → execute."""
+    ctx = state.get("decision")
+    if ctx and ctx.should_clarify:
+        logger.info(f"Confidence gate: {ctx.routing_confidence:.2f} < {ctx.confidence_threshold} → clarify")
+        return "clarify"
+    # Fallback for states without a DecisionContext
     confidence = state.get("routing_confidence", 1.0)
     if confidence < CONFIDENCE_THRESHOLD:
         logger.info(f"Confidence gate: {confidence:.2f} < {CONFIDENCE_THRESHOLD} → clarify")
@@ -54,6 +59,10 @@ def confidence_gate(state: WorkflowState) -> Literal["proceed", "clarify"]:
 
 def grading_decision(state: WorkflowState) -> Literal["pass", "refine", "reroute"]:
     """Route based on grader verdict: pass → END, refine → agent, reroute → re_router."""
+    ctx = state.get("decision")
+    if ctx:
+        return ctx.next_action
+    # Fallback for states without a DecisionContext
     verdict = state.get("grader_verdict", "pass")
     if verdict == "refine":
         return "refine"
@@ -171,12 +180,14 @@ def process_with_langgraph(
         logger.warning(f"Failed to build memory context: {e}")
         memory_context = None
 
+    ctx = DecisionContext()
     initial_state = WorkflowState(
         question=question,
         user_id=user_id,
         conversation_id=conversation_id,
         user_profile=user_profile,
         memory_context=memory_context,
+        decision=ctx,
         refinement_count=0,
         reroute_count=0,
         previous_agents=[],
@@ -206,9 +217,6 @@ async def process_with_langgraph_streaming(
         router_node,
         response_grader_node,
         re_router_node,
-        CONFIDENCE_THRESHOLD,
-        MAX_REFINEMENTS,
-        MAX_REROUTES,
     )
 
     # Build memory context
@@ -232,12 +240,14 @@ async def process_with_langgraph_streaming(
         logger.warning(f"Failed to build memory context: {e}")
 
     # Initialise state
+    ctx = DecisionContext()
     state = WorkflowState(
         question=question,
         user_id=user_id,
         conversation_id=conversation_id,
         user_profile=user_profile,
         memory_context=memory_context,
+        decision=ctx,
         refinement_count=0,
         reroute_count=0,
         previous_agents=[],
@@ -248,34 +258,29 @@ async def process_with_langgraph_streaming(
     state = check_documents_node(state)
     state = router_node(state)
 
-    route = state.get("route", "concept")
-    confidence = state.get("routing_confidence", 1.0)
-
     # ── Confidence gate ──
-    if confidence < CONFIDENCE_THRESHOLD:
+    if ctx.should_clarify:
         state = clarify_query_node(state)
         yield {
             "type": "clarification",
             "content": state.get("response", ""),
             "agent": "clarify",
-            "confidence": confidence,
+            "confidence": ctx.routing_confidence,
         }
         return
 
     # Yield routing info
     yield {
         "type": "routed",
-        "route": route,
-        "confidence": confidence,
+        "route": ctx.route,
+        "confidence": ctx.routing_confidence,
     }
 
     # ── Stream → grade → possibly loop ──
-    iteration = 0
-    max_iterations = 1 + MAX_REFINEMENTS + MAX_REROUTES
+    max_iterations = 1 + ctx.max_refinements + ctx.max_reroutes
 
-    while iteration < max_iterations:
-        iteration += 1
-        current_route = state.get("route", "concept")
+    for iteration in range(max_iterations):
+        current_route = ctx.route
 
         # Stream from the selected agent, collecting full response
         full_response_parts = []
@@ -288,34 +293,30 @@ async def process_with_langgraph_streaming(
         # Capture full response for grading
         state["response"] = "".join(full_response_parts)
         state["agent_used"] = current_route
-        previous = list(state.get("previous_agents") or [])
-        if current_route not in previous:
-            previous.append(current_route)
-        state["previous_agents"] = previous
+        ctx.record_agent_used(current_route)
 
         # Grade
         state = response_grader_node(state)
-        verdict = state.get("grader_verdict", "pass")
 
-        if verdict == "pass":
+        action = ctx.next_action
+        if action == "pass":
             return
 
-        if verdict == "refine":
+        if action == "refine":
             yield {
                 "type": "refining",
-                "feedback": state.get("grader_feedback", ""),
-                "attempt": state.get("refinement_count", 1),
+                "feedback": ctx.grader_feedback or "",
+                "attempt": ctx.refinement_count,
             }
             continue
 
-        if verdict == "reroute":
+        if action == "reroute":
             state = re_router_node(state)
-            new_route = state.get("route", "concept")
             yield {
                 "type": "rerouting",
                 "from_agent": current_route,
-                "to_agent": new_route,
-                "reason": state.get("grader_feedback", ""),
+                "to_agent": ctx.route,
+                "reason": ctx.grader_feedback or "",
             }
             continue
 

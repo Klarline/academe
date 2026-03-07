@@ -249,14 +249,10 @@ async def websocket_chat(websocket: WebSocket):
                         })
                     
                     logger.info(f"Stream complete. Sent {chunk_count} chunks")
-                    
-                    # Send completion
-                    await websocket.send_json({
-                        "type": "end_streaming",
-                        "message_id": client_message_id
-                    })
-                    
-                    # CREATE OR UPDATE CONVERSATION AND SAVE MESSAGES
+
+                    # CREATE OR UPDATE CONVERSATION AND SAVE MESSAGES (before end_streaming so we have message_id)
+                    persisted_message_id = None
+                    final_conversation_id = conversation_id
                     if is_new_conversation:
                         try:
                             from core.models import Message
@@ -284,15 +280,25 @@ async def websocket_chat(websocket: WebSocket):
                                 role="assistant",
                                 content=assistant_response
                             )
-                            conv_repo.add_message(assistant_message)
-                            
+                            persisted_message_id = conv_repo.add_message(assistant_message)
+                            conv_repo.save_rag_response(
+                                message_id=persisted_message_id,
+                                user_id=user_id,
+                                query=content,
+                                answer=assistant_response,
+                                sources=[],
+                                agent_used="concept_explainer",
+                                route="concept",
+                            )
+
                             # Notify frontend
                             await websocket.send_json({
                                 "type": "conversation_created",
                                 "conversation_id": real_conversation_id,
-                                "message_id": client_message_id
+                                "message_id": persisted_message_id
                             })
                             
+                            final_conversation_id = real_conversation_id
                             logger.info(f"Created conversation {real_conversation_id} with 2 messages")
                         except Exception as e:
                             logger.error(f"Failed to create conversation: {e}")
@@ -317,11 +323,27 @@ async def websocket_chat(websocket: WebSocket):
                                 role="assistant",
                                 content=assistant_response
                             )
-                            conv_repo.add_message(assistant_message)
-                            
+                            persisted_message_id = conv_repo.add_message(assistant_message)
+                            conv_repo.save_rag_response(
+                                message_id=persisted_message_id,
+                                user_id=user_id,
+                                query=content,
+                                answer=assistant_response,
+                                sources=[],
+                                agent_used="concept_explainer",
+                                route="concept",
+                            )
+
                             logger.info(f"Saved 2 messages to conversation {conversation_id}")
                         except Exception as e:
                             logger.error(f"Failed to save messages: {e}")
+
+                    # Send completion with message_id for feedback
+                    await websocket.send_json({
+                        "type": "end_streaming",
+                        "message_id": persisted_message_id or client_message_id,
+                        "conversation_id": final_conversation_id,
+                    })
 
                 except asyncio.CancelledError:
                     await websocket.send_json({

@@ -3,7 +3,9 @@ import {
   Conversation,
   ChatMessage,
   SendMessageRequest,
-  SendMessageResponse 
+  SendMessageResponse,
+  FeedbackRequest,
+  FeedbackResponse
 } from '@/types/chat';
 import { API_ENDPOINTS } from '@/lib/constants';
 
@@ -27,6 +29,13 @@ export const chatApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: ['Conversation', 'Message'],
     }),
+    submitFeedback: builder.mutation<FeedbackResponse, FeedbackRequest>({
+      query: (body) => ({
+        url: API_ENDPOINTS.CHAT.FEEDBACK,
+        method: 'POST',
+        body,
+      }),
+    }),
   }),
 });
 
@@ -34,4 +43,5 @@ export const {
   useGetConversationsQuery,
   useGetMessagesQuery,
   useSendMessageMutation,
+  useSubmitFeedbackMutation,
 } = chatApi;

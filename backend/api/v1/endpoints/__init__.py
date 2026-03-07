@@ -12,6 +12,7 @@ from . import progress
 from . import websocket
 from . import practice
 from . import research
+from . import analytics
 
 __all__ = [
     "auth",
@@ -22,4 +23,5 @@ __all__ = [
     "websocket",
     "practice",
     "research",
+    "analytics",
 ]

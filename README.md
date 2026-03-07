@@ -77,6 +77,10 @@ Specialized AI agents handle different tasks:
 - **Redis Response Cache**: Optional Redis-backed semantic cache that persists across restarts and multi-instance deployments
 - **Document Mode**: Answers drawn from uploaded materials with source citations
 - **Knowledge Mode**: Falls back to LLM general knowledge when documents don't cover the topic
+- **arXiv Fallback**: Research agent searches arXiv papers when no documents are uploaded or RAG retrieval fails
+- **End-to-End Feedback Loop**: Frontend thumbs up/down → feedback API → MongoDB → Pandas analytics identifying weak documents and underperforming query types
+- **RAG Analytics (Pandas)**: MongoDB aggregation pipelines + Pandas for satisfaction trends, weak document detection, query type performance, and actionable recommendations
+- **arXiv MCP Server**: Standalone MCP tool server exposing paper search for external clients (Claude Desktop, etc.)
 
 ### Personalized Learning
 
@@ -387,7 +391,7 @@ pytest tests/unit/test_auth_service.py -v
 ### CI/CD Testing
 
 Every push triggers automated testing:
-- 217 unit tests across all modules
+- 449 unit tests across all modules
 - Code quality checks (Black, isort, flake8)
 - Security scanning (Bandit, Safety)
 - Docker multi-stage builds
@@ -483,6 +487,7 @@ class WorkflowState(TypedDict, total=False):
 - `progress`: Concept mastery tracking per user
 - `rag_metrics`: Retrieval performance metrics over time
 - `retrieval_feedback`: User thumbs up/down on RAG answers
+- `rag_responses`: Query/answer/sources stored per message for feedback linkage
 - `propositions`: Atomic factual statements with source chunk back-references
 - `knowledge_graph`: Entity-relationship triples for multi-hop reasoning
 
@@ -587,11 +592,11 @@ academe/
 │   ├── api/                   # FastAPI REST API
 │   │   ├── main.py            # Application entry point
 │   │   ├── v1/                # API version 1
-│   │   │   ├── endpoints/     # Route handlers (auth, chat, documents)
+│   │   ├── endpoints/     # Route handlers (auth, chat, documents, analytics)
 │   │   │   └── deps.py        # Dependencies (authentication)
 │   │   └── services/          # Business logic layer
 │   ├── core/                  # Core business logic
-│   │   ├── agents/            # 5 specialized AI agents
+│   │   ├── agents/            # 5 specialized AI agents (research agent with arXiv fallback)
 │   │   ├── auth/              # JWT authentication service
 │   │   ├── config/            # Configuration management
 │   │   ├── database/          # MongoDB repositories
@@ -600,12 +605,12 @@ academe/
 │   │   ├── graph/             # LangGraph cyclic workflow (router → agent → grader loop)
 │   │   ├── memory/            # Adaptive context management
 │   │   ├── models/            # Pydantic data models
-│   │   ├── rag/               # RAG pipeline, request budget, retrieval profiles
+│   │   ├── rag/               # RAG pipeline, request budget, retrieval profiles, analytics
 │   │   ├── vectors/           # Embeddings & semantic search
 │   │   ├── celery_config.py   # Task queue configuration
 │   │   └── tasks.py           # Background job definitions
 │   ├── tests/                 # Comprehensive test suite
-│   │   ├── unit/              # 313+ unit tests
+│   │   ├── unit/              # 449+ unit tests
 │   │   │   ├── agents/        # Agent behavior tests
 │   │   │   ├── test_auth_service.py
 │   │   │   ├── test_chunking_features.py  # Adaptive chunking, parent-child, context
@@ -614,11 +619,16 @@ academe/
 │   │   │   ├── test_graph.py
 │   │   │   ├── test_rag_advanced.py       # Self-RAG, cache, decomposition, feedback
 │   │   │   ├── test_propositions_and_kg.py  # Proposition indexing, knowledge graph
+│   │   │   ├── test_analytics.py          # RAG analytics module tests
+│   │   │   ├── test_feedback_endpoint.py  # Feedback API endpoint tests
+│   │   │   ├── test_mcp_arxiv.py          # arXiv MCP server tests
 │   │   │   └── test_vectors.py
 │   │   └── evaluation/        # RAG evaluation suite
 │   │       ├── test_retrieval_evaluator.py
 │   │       └── chunking_test_cases.py
 │   ├── requirements.txt       # Python dependencies
+│   ├── mcp_servers/           # MCP tool servers (standalone)
+│   │   └── arxiv_server.py    # arXiv paper search MCP server
 │   └── .env.example           # Environment template
 ├── frontend/
 │   ├── app/                   # Next.js 14 app router
@@ -650,6 +660,7 @@ POST   /api/v1/auth/refresh        # Token refresh
 **Chat & Agents**:
 ```
 POST   /api/v1/chat/message        # Send message to agent system
+POST   /api/v1/chat/feedback       # Submit thumbs up/down on responses
 WS     /api/v1/ws/chat/{user_id}   # WebSocket streaming
 GET    /api/v1/chat/conversations  # List conversations
 ```
@@ -679,6 +690,11 @@ GET    /api/v1/research/sources    # List available sources
 ```
 GET    /health                      # Service health check
 GET    /metrics                     # Prometheus metrics
+```
+
+**Analytics**:
+```
+GET    /api/v1/analytics/report    # RAG performance report (satisfaction, weak docs, recommendations)
 ```
 
 ---

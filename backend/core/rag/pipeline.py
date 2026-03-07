@@ -10,7 +10,7 @@ from core.documents.storage import ChunkRepository
 from core.models import UserProfile, Document, DocumentSearchResult
 from core.config import get_llm
 from core.rag.query_rewriter import QueryRewriter, HyDE
-from core.rag.adaptive_retrieval import AdaptiveRetriever
+from core.rag.adaptive_retrieval import AdaptiveRetriever, classify_query, QueryType
 from core.rag.response_cache import SemanticResponseCache
 from core.rag.self_rag import SelfRAGController
 from core.rag.query_decomposer import QueryDecomposer, retrieve_with_decomposition
@@ -559,11 +559,11 @@ class RAGPipeline:
         **search_kwargs,
     ) -> List[DocumentSearchResult]:
         """
-        Search using both query and HyDE embeddings, then fuse (Option B from paper).
+        Search using vector(query) + vector(hypothesis) + BM25(query), three-way RRF.
 
-        Instead of blindly replacing query embedding with hypothesis, we retrieve
-        with both and fuse via Reciprocal Rank Fusion (RRF). This picks the
-        better result when one embedding outperforms the other.
+        Preserves keyword precision from BM25 (e.g. "dropout") and semantic coverage
+        from both embeddings. Composes with adaptive behaviors: CODE filter,
+        COMPARISON diversification.
         """
         from core.models.document import DocumentChunk
 
@@ -581,26 +581,50 @@ class RAGPipeline:
         # Get the underlying vector search components
         if isinstance(self.search_service, HybridSearchService):
             vs = self.search_service.vector_search
+            hybrid = self.search_service
         else:
             vs = self.search_service
+            hybrid = None
 
+        query_type = classify_query(query)
+        metadata_filter = self._hyde_metadata_filter(query_type, search_kwargs)
         fetch_k = top_k * 4
+        if query_type == QueryType.COMPARISON:
+            fetch_k = top_k * 6  # fetch more for diversify
 
-        # Retrieve with query embedding
-        query_results = vs.pinecone_manager.search_similar_chunks(
-            user_id=user_id,
-            query_embedding=query_embedding,
-            top_k=fetch_k,
-        )
+        def _do_hyde_fusion(meta_filter: Optional[Dict[str, Any]]) -> tuple:
+            """Run vector+vector+BM25 fusion with optional metadata filter."""
+            qr = vs.pinecone_manager.search_similar_chunks(
+                user_id=user_id,
+                query_embedding=query_embedding,
+                top_k=fetch_k,
+                filter=meta_filter,
+            )
+            hr = vs.pinecone_manager.search_similar_chunks(
+                user_id=user_id,
+                query_embedding=hyde_embedding,
+                top_k=fetch_k,
+                filter=meta_filter,
+            )
+            return qr, hr
 
-        # Retrieve with hypothesis embedding
-        hyde_results = vs.pinecone_manager.search_similar_chunks(
-            user_id=user_id,
-            query_embedding=hyde_embedding,
-            top_k=fetch_k,
-        )
+        query_results, hyde_results = _do_hyde_fusion(metadata_filter)
 
-        # Fuse via Reciprocal Rank Fusion (k=60 is standard)
+        # CODE: fallback to unfiltered search if filter yields too few
+        if query_type == QueryType.CODE and metadata_filter:
+            if len(query_results) + len(hyde_results) < 4:  # very few from filter
+                fallback_qr, fallback_hr = _do_hyde_fusion(None)
+                seen = {r["id"] for r in query_results} | {r["id"] for r in hyde_results}
+                for r in fallback_qr:
+                    if r["id"] not in seen:
+                        query_results.append(r)
+                        seen.add(r["id"])
+                for r in fallback_hr:
+                    if r["id"] not in seen:
+                        hyde_results.append(r)
+                        seen.add(r["id"])
+
+        # Three-way RRF: vector(query) + vector(hypothesis) + BM25(query)
         rrf_k = 60
         rrf_scores: Dict[str, float] = {}
         for rank, result in enumerate(query_results, start=1):
@@ -611,6 +635,19 @@ class RAGPipeline:
             vec_id = result.get("id")
             if vec_id:
                 rrf_scores[vec_id] = rrf_scores.get(vec_id, 0) + 1.0 / (rrf_k + rank)
+
+        # Add BM25 to RRF (keyword precision for e.g. "dropout")
+        if hybrid:
+            bm25_scores = hybrid._get_bm25_scores(user_id, query)
+            if bm25_scores:
+                bm25_ranked = sorted(
+                    bm25_scores.keys(),
+                    key=lambda vid: bm25_scores[vid],
+                    reverse=True,
+                )
+                for rank, vec_id in enumerate(bm25_ranked, start=1):
+                    if bm25_scores[vec_id] > 0:
+                        rrf_scores[vec_id] = rrf_scores.get(vec_id, 0) + 1.0 / (rrf_k + rank)
 
         # Merge result metadata (prefer first occurrence for doc/chunk info)
         all_results = {r["id"]: r for r in query_results}
@@ -662,9 +699,23 @@ class RAGPipeline:
 
         # Rerank with cross-encoder using the original query
         if use_reranking and search_results:
-            search_results = vs.rerank_results(query, search_results, top_k=top_k)
+            # COMPARISON: rerank more candidates so diversify has a pool to select from
+            rerank_k = top_k * 2 if query_type == QueryType.COMPARISON else top_k
+            search_results = vs.rerank_results(query, search_results, top_k=rerank_k)
+
+        # COMPARISON: diversify across documents/sections (MMR-style selection)
+        if query_type == QueryType.COMPARISON and self.adaptive_retriever:
+            search_results = self.adaptive_retriever._diversify(search_results, top_k)
 
         return search_results[:top_k]
+
+    def _hyde_metadata_filter(
+        self, query_type: str, search_kwargs: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Build Pinecone metadata filter for HyDE (CODE filter from adaptive)."""
+        if query_type == QueryType.CODE:
+            return {"has_code": True}
+        return search_kwargs.get("filter") if search_kwargs.get("filter") else None
 
     def _search_with_hyde_hypothesis_only(
         self,

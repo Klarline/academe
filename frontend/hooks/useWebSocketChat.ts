@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChatWebSocket } from '@/lib/websocket/ChatWebSocket';
 import { useAppSelector, useAppDispatch } from '@/store/hooks';
-import { addMessage, updateLastMessage, setStreaming } from '@/store/slices/chatSlice';
+import { addMessage, updateLastMessage, updateLastMessageId, setStreaming, migrateConversationAfterCreate } from '@/store/slices/chatSlice';
 import { ChatMessage } from '@/types/chat';
 
 export function useWebSocketChat(conversationId?: string) {
@@ -40,6 +40,20 @@ export function useWebSocketChat(conversationId?: string) {
         }));
       } else if (data.type === 'complete' || data.type === 'end_streaming') {
         dispatch(setStreaming(false));
+        if (data.message_id) {
+          const convId = data.conversation_id || conversationId || 'new';
+          dispatch(updateLastMessageId({ conversationId: convId, messageId: data.message_id }));
+        }
+      } else if (data.type === 'conversation_created') {
+        const realConvId = data.conversation_id;
+        const oldConvId = conversationId || 'new';
+        if (realConvId && oldConvId === 'new') {
+          dispatch(migrateConversationAfterCreate({
+            oldConvId,
+            newConvId: realConvId,
+            messageId: data.message_id
+          }));
+        }
       }
     });
 

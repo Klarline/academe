@@ -115,11 +115,12 @@ Six layers of retrieval for best precision:
 When enabled (e.g. in the `deep` retrieval profile), HyDE improves semantic retrieval by:
 
 1. **Hypothesis generation** — LLM generates a short hypothetical answer passage for the query
-2. **Dual retrieval** — Vector search with both the original query embedding and the hypothesis embedding
-3. **Reciprocal Rank Fusion (RRF)** — Merge results from both retrievals via RRF (k=60) to pick the better result when one embedding outperforms the other
+2. **Three-way retrieval** — Vector search with query embedding, vector search with hypothesis embedding, and BM25 keyword search (when HybridSearchService is used)
+3. **Reciprocal Rank Fusion (RRF)** — Merge all three rank lists via RRF (k=60) for semantic coverage and keyword precision (e.g. exact "dropout" matches)
 4. **Reranking** — Cross-encoder reranks the fused list using the original query
+5. **Adaptive composition** — CODE queries: filter for `has_code` chunks (with fallback if too few); COMPARISON queries: diversify across documents/sections
 
-HyDE bypasses AdaptiveRetriever (which does not support HyDE) and runs through `_search()` when `use_hyde=True`. The query embedding from the response cache lookup is reused for cache put to avoid redundant embedding calls.
+HyDE bypasses AdaptiveRetriever's BM25 weight tuning (replaced by three-way RRF) but composes with CODE filter and COMPARISON diversification. The query embedding from the response cache lookup is reused for cache put to avoid redundant embedding calls.
 
 ### 4. BM25 Index Lifecycle
 
@@ -144,6 +145,7 @@ MongoDB "chunks"             →  Chunk text, page numbers, content flags
 Pinecone index               →  Embeddings with chunk metadata
 MongoDB "rag_metrics"        →  Performance metrics over time
 MongoDB "retrieval_feedback" →  User thumbs up/down on RAG answers
+MongoDB "rag_responses"      →  Query/answer/sources per message (feedback linkage)
 MongoDB "propositions"       →  Atomic facts with source chunk back-references
 MongoDB "knowledge_graph"    →  Entity-relationship triples for multi-hop reasoning
 In-memory cache              →  Semantic response cache (query embedding → answer)
@@ -214,7 +216,8 @@ backend/core/
 │   ├── fallback.py              # Deterministic fallback chain + FallbackStrategies defaults
 │   ├── stage_metrics.py         # Per-stage value metrics (RequestMetrics + AggregateMetrics)
 │   ├── proposition_indexer.py   # PropositionExtractor + PropositionRepository: atomic fact indexing
-│   └── knowledge_graph.py       # KGExtractor + KnowledgeGraphTraverser: entity-rel extraction + multi-hop
+│   ├── knowledge_graph.py       # KGExtractor + KnowledgeGraphTraverser: entity-rel extraction + multi-hop
+│   └── analytics.py             # RAGAnalytics: Pandas + MongoDB aggregation for quality insights
 ├── vectors/
 │   ├── hybrid_search.py         # HybridSearchService: BM25+vector fusion
 │   ├── search.py                # SemanticSearchService + cross-encoder reranking + contextual embeddings
@@ -226,7 +229,8 @@ backend/core/
 │   ├── doc_type_detector.py     # Classify textbook/paper/notes/code/general
 │   └── storage.py               # Repos + get_adjacent_chunks() for sliding window
 ├── graph/
-│   ├── state.py                 # WorkflowState with loop-control fields
+│   ├── state.py                 # WorkflowState with DecisionContext and budget
+│   ├── decision_context.py      # Unified DecisionContext: routing + grading + loop signals
 │   ├── nodes.py                 # All nodes: router, agent_executor, response_grader, clarify, re_router
 │   └── workflow.py              # Cyclic LangGraph: confidence gate, refinement loop, re-routing
 ├── config/
@@ -236,4 +240,14 @@ backend/core/
     ├── ragas_evaluator.py       # Level 2: RAGAS metrics
     ├── metrics_tracker.py       # Performance logging + trending
     └── test_data.py             # 20+ ML test questions with ground truth
+
+backend/core/agents/
+└── research_agent.py            # RAG-powered Q&A with arXiv fallback when no docs or RAG fails
+
+backend/mcp_servers/
+└── arxiv_server.py              # Standalone MCP tool server: search_papers, get_paper_details, search_by_author
+
+backend/api/v1/endpoints/
+├── chat.py                      # Chat + POST /feedback endpoint (links to rag_responses)
+└── analytics.py                 # GET /report — RAG analytics via RAGAnalytics
 ```

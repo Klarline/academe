@@ -549,3 +549,99 @@ Plus one structural change:
 - *Redis with vector search (RediSearch)*: True ANN search but adds module dependency and complexity
 - *Pinecone as cache*: Leverages existing vector DB but conflates cache with document index
 - *Memcached*: Faster for simple key-value but no TTL-per-key and no data structures
+
+---
+
+## 23. Unified DecisionContext Object
+
+**Decision**: Replace the scattered decision-related fields in `WorkflowState` (`routing_confidence`, `routing_reasoning`, `grader_verdict`, `grader_feedback`, `refinement_count`, `reroute_count`, `previous_agents`) with a single `DecisionContext` dataclass that accumulates all signals in one place.
+
+**Reasoning**:
+- Conditional edge functions (`confidence_gate`, `grading_decision`) and nodes (`response_grader_node`, `re_router_node`) were reading and writing 7+ separate state fields to make routing decisions
+- Understanding "why did the graph take this path?" required inspecting multiple disconnected fields
+- Adding new signals (e.g., retrieval sufficiency) would mean adding yet another loose field
+- Codex review recommended "unify confidence signals: router confidence, retrieval sufficiency, and grader verdict should feed one decision object"
+
+**Implementation**:
+- `core/graph/decision_context.py`: `DecisionContext` dataclass with recording helpers (`record_routing`, `record_grading`, `record_reroute`, `record_agent_used`) and query properties (`should_clarify`, `can_refine`, `can_reroute`, `loops_exhausted`, `next_action`)
+- Stored in `WorkflowState["decision"]`; all nodes read/write through it
+- `_sync_decision_to_state()` copies context fields back to legacy state fields after each node, preserving full backward compatibility with existing tests and the streaming path
+- Conditional edges (`confidence_gate`, `grading_decision`) check the `DecisionContext` first, with fallback to legacy fields for states created without one
+- Constants (`MAX_REFINEMENTS`, `MAX_REROUTES`, `CONFIDENCE_THRESHOLD`) moved to `decision_context.py` as the single source of truth
+
+**Trade-offs**:
+- (+) One object to inspect for "why did the graph do this?" — simplifies debugging and logging
+- (+) `next_action` property replaces ad-hoc verdict parsing in the grading edge
+- (+) Easy to add new signals (e.g., retrieval sufficiency) without touching `WorkflowState`
+- (+) Full backward compatibility — legacy fields still work, existing tests unchanged
+- (-) Adds a coordination object that nodes must use (mitigated: `_decision()` helper auto-creates from legacy fields)
+- (-) `_sync_decision_to_state()` duplicates data between context and state (necessary for LangGraph serialization)
+
+**Alternatives considered**:
+- *Just rename fields*: Doesn't reduce the number of fields or provide query helpers
+- *Nested TypedDict*: TypedDict can't have methods; wouldn't support `should_clarify` or `next_action`
+- *Remove legacy fields entirely*: Would break all existing tests and any external consumers of `WorkflowState`
+
+
+---
+
+## 24. arXiv Fallback in Research Agent
+
+**Decision**: When the research agent has no uploaded documents or when the RAG pipeline fails, fall back to searching arXiv papers via direct Python import from `mcp_servers/arxiv_server.py`. Synthesize an answer from paper abstracts using the LLM, with citations.
+
+**Reasoning**:
+- Previously, users with no documents got a dead-end "upload documents first" message
+- Students often want to explore topics before uploading materials
+- The arXiv API is free, no auth required, and returns structured metadata (title, authors, abstract)
+- Direct import is correct because the agent and arXiv tools share the same Python codebase — MCP protocol overhead is unnecessary
+
+**Degradation chain**:
+1. User has documents → RAG pipeline (primary)
+2. No documents → arXiv search + LLM synthesis with citations
+3. RAG fails (e.g., Pinecone down) → arXiv fallback
+4. Both fail → friendly error message
+
+**Trade-offs**:
+- (+) Users get useful answers even without uploaded documents
+- (+) arXiv abstracts are high-quality, peer-reviewed content
+- (+) Graceful degradation — RAG failure no longer means total failure
+- (-) arXiv API has rate limits (~3 req/s) and ~1-2s latency
+- (-) Abstracts are summaries, not full text — answers may lack depth
+- (-) Network dependency (mitigated by fallback to error message)
+
+**Alternatives considered**:
+- *MCP client in agent*: Would add subprocess + JSON-RPC overhead to call a function importable in the same process
+- *Google Scholar*: No official API; scraping is unreliable and against TOS
+- *Always require documents*: Simpler but bad UX for new users
+
+---
+
+## 25. End-to-End Feedback Loop with Pandas Analytics
+
+**Decision**: Build a complete feedback pipeline: frontend thumbs up/down → `POST /api/v1/chat/feedback` → `rag_responses` + `retrieval_feedback` in MongoDB → `RAGAnalytics` module using MongoDB aggregation pipelines + Pandas for trend detection and opportunity identification.
+
+**Reasoning**:
+- `RetrievalFeedback` class existed but had no way for users to submit feedback (no API, no UI)
+- Without feedback data, retrieval quality degrades silently
+- MongoDB aggregation pipelines handle server-side grouping/counting efficiently
+- Pandas handles the analysis layer: rolling averages, trend detection, ranking
+- This combination makes both "MongoDB aggregation" and "Pandas for analysis" genuine capabilities
+
+**Implementation**:
+- `rag_responses` collection: stores `(message_id, user_id, query, answer, sources)` at response time — single lookup for feedback, no fragile "find previous message" logic
+- `POST /api/v1/chat/feedback`: accepts `{message_id, rating, comment}`, looks up `rag_responses`, calls `RetrievalFeedback.record()`
+- `FeedbackButtons.tsx`: thumbs up/down on assistant messages, wired via RTK Query
+- `RAGAnalytics`: `satisfaction_trends()`, `weak_documents()`, `query_type_performance()`, `generate_report()` with actionable recommendations
+- `GET /api/v1/analytics/report`: exposes analytics scoped to authenticated user
+
+**Trade-offs**:
+- (+) Closed-loop quality improvement — weak documents and failing query types identified automatically
+- (+) MongoDB aggregation does heavy lifting server-side; Pandas receives pre-grouped data
+- (+) `rag_responses` indexed on `message_id` for O(1) lookup
+- (-) Requires user engagement (thumbs up/down) to populate data
+- (-) `rag_responses` adds ~500 bytes per assistant message to MongoDB storage
+
+**Alternatives considered**:
+- *Pull all data into Pandas*: Works at 100 records, breaks at 100K — aggregation pipelines scale better
+- *Look up previous message for query*: Fragile (race conditions, system messages, deletions)
+- *Skip analytics, log only*: Misses the "opportunity identification" capability

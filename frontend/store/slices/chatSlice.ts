@@ -44,6 +44,29 @@ const chatSlice = createSlice({
         }
       }
     },
+    updateLastMessageId: (state, action: PayloadAction<{ conversationId: string; messageId: string }>) => {
+      const { conversationId, messageId } = action.payload;
+      const messages = state.messages[conversationId];
+      if (messages && messages.length > 0) {
+        const lastMessage = messages[messages.length - 1];
+        if (lastMessage.role === 'assistant') {
+          lastMessage.id = messageId;
+        }
+      }
+    },
+    migrateConversationAfterCreate: (state, action: PayloadAction<{ oldConvId: string; newConvId: string; messageId?: string }>) => {
+      const { oldConvId, newConvId, messageId } = action.payload;
+      const messages = state.messages[oldConvId] || [];
+      state.messages[newConvId] = messages;
+      delete state.messages[oldConvId];
+      state.currentConversationId = newConvId;
+      if (messageId && messages.length > 0) {
+        const lastMessage = messages[messages.length - 1];
+        if (lastMessage.role === 'assistant') {
+          lastMessage.id = messageId;
+        }
+      }
+    },
     setStreaming: (state, action: PayloadAction<boolean>) => {
       state.isStreaming = action.payload;
     },
@@ -68,6 +91,8 @@ export const {
   setMessages,
   addMessage,
   updateLastMessage,
+  updateLastMessageId,
+  migrateConversationAfterCreate,
   setStreaming,
   setLoading,
   setError,

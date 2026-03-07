@@ -8,6 +8,7 @@ from typing import TypedDict, Optional, List, Dict, Any
 from datetime import datetime
 
 from core.rag.request_budget import RequestBudget
+from core.graph.decision_context import DecisionContext
 
 
 class WorkflowState(TypedDict, total=False):
@@ -44,7 +45,12 @@ class WorkflowState(TypedDict, total=False):
     # Memory
     memory_context: Optional[Dict[str, Any]]
     
-    # Loop control (quality gate + refinement)
+    # Unified decision context (replaces scattered loop-control fields)
+    decision: Optional[DecisionContext]
+
+    # Legacy loop-control fields — kept for backward compatibility.
+    # Nodes now read/write via state["decision"]; these are synced
+    # from the decision context before returning from each node.
     refinement_count: int
     reroute_count: int
     grader_feedback: Optional[str]
@@ -101,8 +107,9 @@ class ResearchAgentState(TypedDict, total=False):
 # Export state types
 __all__ = [
     "WorkflowState",
+    "DecisionContext",
     "RouterState",
     "ConceptExplainerState",
     "CodeHelperState",
-    "ResearchAgentState"
+    "ResearchAgentState",
 ]
