@@ -60,15 +60,16 @@ class PineconeClient:
             self.mock_data = {}  # Simple in-memory storage for testing
             return
 
-        if not self.api_key:
-            # Try to get from environment/settings
-            try:
-                from core.config.settings import get_settings
-                settings = get_settings()
+        # Load from settings if not provided
+        try:
+            from core.config.settings import get_settings
+            settings = get_settings()
+            if not self.api_key:
                 self.api_key = getattr(settings, 'pinecone_api_key', None)
                 self.environment = getattr(settings, 'pinecone_environment', None)
-            except:
-                pass
+            self.index_name = getattr(settings, 'pinecone_index_name', None) or self.index_name
+        except Exception:
+            pass
 
         if not self.api_key:
             logger.warning("No Pinecone API key provided, using mock mode")
@@ -151,14 +152,18 @@ class PineconeClient:
                     namespace=namespace
                 )
 
-                total_upserted += response.get("upserted_count", 0)
+                # Handle both snake_case and camelCase response formats
+                count = response.get("upserted_count") or response.get("upsertedCount", 0)
+                total_upserted += count
+                if count == 0 and len(batch) > 0:
+                    logger.warning(f"Pinecone upsert batch returned 0 upserted: {response}")
 
             logger.info(f"Upserted {total_upserted} vectors to namespace {namespace}")
 
             return {"upserted_count": total_upserted}
 
         except Exception as e:
-            logger.error(f"Failed to upsert vectors: {e}")
+            logger.error(f"Failed to upsert vectors: {e}", exc_info=True)
             return {"upserted_count": 0, "error": str(e)}
 
     def query(
@@ -236,7 +241,7 @@ class PineconeClient:
             Deletion response
         """
         if self.mock_mode:
-            return self._mock_delete(ids, namespace)
+            return self._mock_delete(ids, namespace, filter, delete_all)
 
         try:
             response = self.index.delete(
@@ -348,7 +353,9 @@ class PineconeClient:
     def _mock_delete(
         self,
         ids: Optional[List[str]] = None,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        filter: Optional[Dict[str, Any]] = None,
+        delete_all: bool = False,
     ) -> Dict[str, Any]:
         """Mock delete for testing."""
         namespace = namespace or "default"
@@ -357,11 +364,23 @@ class PineconeClient:
             return {"deleted": 0}
 
         deleted = 0
-        if ids:
+        if delete_all:
+            deleted = len(self.mock_data[namespace])
+            del self.mock_data[namespace]
+            self.mock_data[namespace] = {}
+        elif ids:
             for vec_id in ids:
                 if vec_id in self.mock_data[namespace]:
                     del self.mock_data[namespace][vec_id]
                     deleted += 1
+        elif filter:
+            to_delete = [
+                vec_id for vec_id, data in self.mock_data[namespace].items()
+                if data.get("metadata", {}).get("document_id") == filter.get("document_id")
+            ]
+            for vec_id in to_delete:
+                del self.mock_data[namespace][vec_id]
+                deleted += 1
 
         return {"deleted": deleted}
 
@@ -428,8 +447,10 @@ class PineconeManager:
 
         # Upsert to Pinecone
         result = self.client.upsert_vectors(vectors, namespace=namespace)
-
-        return result.get("upserted_count", 0) > 0
+        upserted = result.get("upserted_count", 0)
+        if "error" in result:
+            logger.error(f"Pinecone upsert error: {result['error']}")
+        return upserted > 0
 
     def search_similar_chunks(
         self,
@@ -495,3 +516,15 @@ class PineconeManager:
         )
 
         return True
+
+    def delete_user_namespace(self, user_id: str) -> bool:
+        """
+        Delete all vectors in a user's namespace (full wipe).
+        Use when document records are gone but orphaned vectors remain.
+        """
+        namespace = self.client.create_namespace(user_id)
+        result = self.client.delete_vectors(
+            namespace=namespace,
+            delete_all=True,
+        )
+        return "error" not in result

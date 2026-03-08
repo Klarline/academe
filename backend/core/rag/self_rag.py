@@ -60,7 +60,7 @@ class RetrievalVerifier:
             )
 
         context_preview = "\n".join(
-            r.chunk.content[:200] for r in results[:5]
+            r.chunk.content[:400] for r in results[:5]
         )
 
         prompt = f"""You are a retrieval quality judge. Decide whether the retrieved context
@@ -76,8 +76,13 @@ SUFFICIENT
 INSUFFICIENT: <brief reason>
 REFORMULATE: <better search query>
 
-Only respond INSUFFICIENT or REFORMULATE if the context is clearly
-irrelevant or missing key information needed to answer the question."""
+Guidelines:
+- Respond SUFFICIENT if the context contains the answer, even if it is
+  implicit, spread across multiple passages, or requires minor inference.
+- Only respond INSUFFICIENT or REFORMULATE if the context is clearly
+  about a different topic or completely missing the key information.
+- When in doubt, respond SUFFICIENT — it is better to generate from
+  partially relevant context than to discard it and retry."""
 
         try:
             response = self.llm.invoke(prompt)

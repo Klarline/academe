@@ -25,13 +25,13 @@ chunks and uses them as context for LLM-generated explanations.
               │    Hybrid Search        │
               │  ┌──────┐  ┌────────┐  │
               │  │ BM25 │  │ Vector │  │  Weighted score fusion
-              │  │ (30%) │  │ (70%) │  │  (0.3 * BM25 + 0.7 * Vector)
+              │  │ (10%) │  │ (90%) │  │  (0.1 * BM25 + 0.9 * Vector)
               │  └──────┘  └────────┘  │
               │  (contextual embeddings)│
               └────────────┬────────────┘
                            │
                     ┌──────▼──────┐
-                    │Cross-Encoder│  ms-marco-MiniLM-L-6-v2
+                    │Cross-Encoder│  BAAI/bge-reranker-base
                     │  Reranker   │  Reranks top-20 → top-5
                     └──────┬──────┘
                            │
@@ -76,9 +76,11 @@ Upload → Detect Type → Adaptive Chunk → Enrich → Embed → Index (Pineco
   - `adaptive_chunk()`: Per-type profiles (textbook 1200/300, paper 800/200, notes 600/100, code 1000/150)
   - `chunk_with_parents()`: Large parent windows split into small retrieval children; children store parent content in metadata
   - Recursive, semantic, and character-level splitters
-- **EmbeddingService** (`core/vectors/embeddings.py`): Gemini embedding-001 (768 dims, free tier; falls back to sentence-transformers or mock)
+- **EmbeddingService** (`core/vectors/embeddings.py`): OpenAI text-embedding-3-small (1536 dims; falls back to sentence-transformers or mock)
 - **Contextual Embedding Enrichment** (`core/vectors/search.py`): Prepends `Document: {title} | Section: {section}` to chunk text before embedding, so vectors capture document-level context
 - **PineconeManager** (`core/vectors/pinecone_client.py`): Vector index with user namespaces
+
+**Document deletion:** When a document is deleted, `DocumentManager.delete_document()` removes Pinecone vectors, propositions, KG triples, MongoDB chunks, and the file. 
 
 ### 2. Retrieval Stack
 
@@ -102,7 +104,7 @@ Six layers of retrieval for best precision:
 4. **Multi-query expansion** — Generate 3 alternative phrasings, retrieve for each, merge results
 5. **Adaptive retrieval** — `AdaptiveRetriever` adjusts BM25/vector weights by query type
 6. **Hybrid search** — BM25 handles exact terms ("PCA", "eigenvalue"), vectors handle semantics
-7. **Score fusion** — Normalize + weighted combination (0.3 BM25 / 0.7 vector)
+7. **Score fusion** — Normalize + weighted combination (0.1 BM25 / 0.9 vector)
 8. **Cross-encoder reranking** — Score query-document pairs for final ranking
 9. **Self-RAG verification** — LLM judges if context is sufficient; reformulates + retries if not
 10. **Context expansion** — Sliding window (±1 adjacent chunks) or parent-child (expand child→parent)

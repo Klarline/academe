@@ -8,6 +8,7 @@ Supports multiple providers:
 """
 
 import logging
+import os
 import threading
 from typing import List, Optional, Dict, Any
 import hashlib
@@ -82,6 +83,11 @@ class EmbeddingService:
     @staticmethod
     def _auto_detect_provider() -> str:
         """Choose the best available provider based on settings, packages, and API keys."""
+        # Explicit env var (highest priority; works when Settings path differs)
+        env_provider = os.environ.get("EMBEDDING_PROVIDER", "").strip().lower()
+        if env_provider:
+            return env_provider
+
         try:
             from core.config.settings import get_settings
             settings = get_settings()
@@ -422,9 +428,10 @@ def create_embedding_service(config: Optional[Dict[str, Any]] = None) -> Embeddi
     Factory function to create embedding service.
 
     Provider priority (when not specified):
-        1. gemini — if GOOGLE_API_KEY is set (free tier, best quality)
-        2. sentence-transformers — local, no API key needed
-        3. mock — deterministic random vectors
+        1. EMBEDDING_PROVIDER from settings (openai, gemini, sentence-transformers)
+        2. gemini — if GOOGLE_API_KEY is set (free tier)
+        3. sentence-transformers — local, no API key needed
+        4. mock — deterministic random vectors
 
     Args:
         config: Configuration dictionary
@@ -434,6 +441,20 @@ def create_embedding_service(config: Optional[Dict[str, Any]] = None) -> Embeddi
     """
     if not config:
         config = {}
+        try:
+            from core.config.settings import get_settings
+            s = get_settings()
+            if s.embedding_provider:
+                config["provider"] = s.embedding_provider
+            if s.embedding_model:
+                config["model_name"] = s.embedding_model
+        except Exception:
+            pass
+        # Explicit env fallback (Settings may not load EMBEDDING_* in all contexts)
+        if not config.get("provider") and os.environ.get("EMBEDDING_PROVIDER"):
+            config["provider"] = os.environ.get("EMBEDDING_PROVIDER").strip().lower()
+        if not config.get("model_name") and os.environ.get("EMBEDDING_MODEL"):
+            config["model_name"] = os.environ.get("EMBEDDING_MODEL").strip()
 
     provider = config.get("provider")  # None → auto-detect
     model_name = config.get("model_name")

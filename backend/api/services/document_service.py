@@ -111,21 +111,36 @@ class DocumentService:
         document_id: str
     ) -> bool:
         """
-        Delete a document.
-
-        Args:
-            user_id: User ID
-            document_id: Document ID
-
-        Returns:
-            Success status
+        Delete a document. Removes the document record immediately so it
+        disappears from the UI, then enqueues Celery to clean up Pinecone,
+        propositions, KG, chunks, and file in the background.
         """
-        success, message = self.doc_manager.delete_document(
+        success, file_path = self.doc_manager.delete_document_record(
             document_id=document_id,
             user_id=user_id,
-            delete_file=True
         )
-        return success
+        if not success:
+            return False
+
+        # Enqueue background cleanup (non-blocking)
+        try:
+            from core.tasks import delete_document_task
+            delete_document_task.delay(
+                document_id=document_id,
+                user_id=user_id,
+                file_path=file_path or "",
+            )
+        except Exception as e:
+            logger.warning(f"Failed to enqueue delete task (cleanup may be incomplete): {e}")
+
+        # Invalidate BM25 cache
+        try:
+            if hasattr(self.rag_pipeline.search_service, "invalidate_user_index"):
+                self.rag_pipeline.search_service.invalidate_user_index(user_id)
+        except Exception as e:
+            logger.warning(f"Failed to invalidate BM25 cache: {e}")
+
+        return True
 
     async def search_documents(
         self,

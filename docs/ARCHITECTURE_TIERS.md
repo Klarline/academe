@@ -24,7 +24,7 @@ retrieval profile).
 | ------------------------------ | ---------------------------------------------------------------------------------------------------- | -------------------------------- |
 | **Multi-agent routing**        | LLM-based router dispatches to Concept Explainer, Code Helper, Research Agent, or Practice Generator | `core/agents/router.py`          |
 | **Hybrid search**              | Weighted fusion of BM25 (keyword) and Pinecone vector search with contextual embeddings              | `core/vectors/hybrid_search.py`  |
-| **Cross-encoder reranking**    | `ms-marco-MiniLM-L-6-v2` reranks top candidates for precision                                        | `core/vectors/hybrid_search.py`  |
+| **Cross-encoder reranking**    | `BAAI/bge-reranker-base` reranks top candidates for precision                                        | `core/vectors/hybrid_search.py`  |
 | **Adaptive retrieval**         | Query-type classification (definition / comparison / code / procedural) adjusts search parameters    | `core/rag/adaptive_retrieval.py` |
 | **Adaptive chunking**          | PDF / code / markdown-aware chunk boundaries with sliding-window context expansion                   | `core/documents/chunker.py`      |
 | **Semantic response cache**    | Embedding-based cache (in-memory or Redis-backed) avoids redundant LLM calls for similar queries     | `core/rag/response_cache.py`     |

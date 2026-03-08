@@ -39,8 +39,8 @@ class HybridSearchService:
         vector_search: Optional[SemanticSearchService] = None,
         chunk_repo: Optional[ChunkRepository] = None,
         doc_repo: Optional[DocumentRepository] = None,
-        weight_bm25: float = 0.3,
-        weight_vector: float = 0.7,
+        weight_bm25: float = 0.1,
+        weight_vector: float = 0.9,
     ):
         self.vector_search = vector_search or SemanticSearchService()
         self.chunk_repo = chunk_repo or ChunkRepository()

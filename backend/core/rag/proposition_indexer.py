@@ -260,6 +260,11 @@ class PropositionRepository:
         result = self._collection().delete_many({"document_id": document_id})
         return result.deleted_count
 
+    def delete_user_propositions(self, user_id: str) -> int:
+        """Delete all propositions for a user (full wipe)."""
+        result = self._collection().delete_many({"user_id": user_id})
+        return result.deleted_count
+
     def count(self, document_id: Optional[str] = None) -> int:
         query = {"document_id": document_id} if document_id else {}
         return self._collection().count_documents(query)

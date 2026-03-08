@@ -1,0 +1,1 @@
+"""Academe RAG evaluation package."""

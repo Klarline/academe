@@ -34,7 +34,9 @@ class SemanticSearchService:
             pinecone_client: Client for vector database
         """
         self.embedding_service = embedding_service or create_embedding_service()
-        self.pinecone_client = pinecone_client or PineconeClient()
+        # Use embedding dim so Pinecone index matches embedding model
+        dim = self.embedding_service.embedding_dim
+        self.pinecone_client = pinecone_client or PineconeClient(dimension=dim)
         self.pinecone_manager = PineconeManager(self.pinecone_client)
         self.chunk_repo = ChunkRepository()
         self.doc_repo = DocumentRepository()
@@ -44,10 +46,10 @@ class SemanticSearchService:
         if CROSS_ENCODER_AVAILABLE:
             try:
                 self._reranker = CrossEncoder(
-                    "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                    "BAAI/bge-reranker-base",
                     max_length=512,
                 )
-                logger.info("Cross-encoder reranker loaded")
+                logger.info("Cross-encoder reranker loaded (BAAI/bge-reranker-base)")
             except Exception as e:
                 logger.warning(f"Reranker not available: {e}")
 
@@ -312,6 +314,12 @@ class SemanticSearchService:
         else:
             reranked = self._rerank_results(query, initial_results)
 
+        # Filter by min score if configured (improves context precision)
+        min_score = self._get_reranker_min_score()
+        if min_score is not None:
+            filtered = [r for r in reranked if r.score >= min_score]
+            reranked = filtered if filtered else reranked[:1]  # fallback to best chunk
+
         return reranked[:rerank_top_k]
 
     def rerank_results(
@@ -322,6 +330,7 @@ class SemanticSearchService:
     ) -> List[DocumentSearchResult]:
         """
         Rerank existing results with cross-encoder (or keyword fallback).
+        Optionally filter out low-scoring chunks to improve context precision.
 
         Useful when initial retrieval comes from hybrid search.
         """
@@ -335,7 +344,21 @@ class SemanticSearchService:
         else:
             reranked = self._rerank_results(query, results)
 
+        # Filter by min score if configured (improves context precision)
+        min_score = self._get_reranker_min_score()
+        if min_score is not None:
+            filtered = [r for r in reranked if r.score >= min_score]
+            reranked = filtered if filtered else reranked[:1]  # fallback to best chunk
+
         return reranked[:top_k] if top_k else reranked
+
+    def _get_reranker_min_score(self) -> Optional[float]:
+        """Get reranker min score from settings (filters low-relevance chunks)."""
+        try:
+            from core.config.settings import get_settings
+            return get_settings().reranker_min_score
+        except Exception:
+            return None
 
     def _rerank_with_cross_encoder(
         self,
@@ -444,6 +467,14 @@ class SemanticSearchService:
 
         except Exception as e:
             logger.error(f"Failed to delete document index: {e}")
+            return False
+
+    def delete_user_namespace(self, user_id: str) -> bool:
+        """Delete all vectors in a user's namespace (full wipe)."""
+        try:
+            return self.pinecone_manager.delete_user_namespace(user_id)
+        except Exception as e:
+            logger.error(f"Failed to wipe user namespace: {e}")
             return False
 
     def get_index_stats(self, user_id: str) -> Dict[str, Any]:

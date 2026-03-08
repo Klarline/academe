@@ -68,12 +68,24 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
 
+    # Evaluation (optional)
+    eval_user_id: str | None = None  # User whose documents to use for RAG eval; auto-detect if unset
+
+    # Reranker: min score to keep chunks (BGE scores ~-10 to 10; try 0.0 or 0.3 to filter noise)
+    reranker_min_score: float | None = None  # None = no filter
+
     model_config = ConfigDict(
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         case_sensitive=False
     )
     
+    @field_validator('pinecone_api_key')
+    @classmethod
+    def strip_pinecone_key(cls, v: str | None) -> str | None:
+        """Strip whitespace from Pinecone API key (avoids 401 Malformed domain)."""
+        return v.strip() if v else None
+
     @field_validator('jwt_secret_key')
     @classmethod
     def validate_jwt_secret(cls, v: str) -> str:

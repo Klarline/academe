@@ -256,15 +256,10 @@ class DocumentManager:
         delete_file: bool = True
     ) -> Tuple[bool, str]:
         """
-        Delete a document and its chunks.
+        Delete a document and all associated data.
 
-        Args:
-            document_id: Document ID
-            user_id: User ID (for verification)
-            delete_file: Whether to delete the physical file
-
-        Returns:
-            Tuple of (success, message)
+        Removes: Pinecone vectors, propositions, KG triples, MongoDB chunks,
+        and optionally the physical file. Ensures re-upload gets a clean slate.
         """
         try:
             # Get document
@@ -276,14 +271,31 @@ class DocumentManager:
             if document.user_id != user_id:
                 return False, "Unauthorized"
 
-            # Delete chunks
+            # 1. Delete from Pinecone (vectors)
+            try:
+                from core.vectors import SemanticSearchService
+                search_service = SemanticSearchService()
+                search_service.delete_document_index(document_id, user_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete Pinecone vectors: {e}")
+
+            # 2. Delete propositions and KG triples
+            try:
+                from core.rag.proposition_indexer import PropositionRepository
+                from core.rag.knowledge_graph import KnowledgeGraphRepository
+                PropositionRepository().delete_document_propositions(document_id)
+                KnowledgeGraphRepository().delete_document_triples(document_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete propositions/KG: {e}")
+
+            # 3. Delete chunks from MongoDB
             deleted_chunks = self.chunk_repo.delete_document_chunks(document_id)
 
-            # Delete file if requested
+            # 4. Delete file if requested
             if delete_file and document.file_path:
                 self.storage.delete_document_file(document.file_path)
 
-            # Mark document as deleted
+            # 5. Mark document as deleted
             self.doc_repo.delete_document(document_id)
 
             return True, f"Deleted document and {deleted_chunks} chunks"
@@ -291,6 +303,66 @@ class DocumentManager:
         except Exception as e:
             logger.error(f"Failed to delete document: {e}")
             return False, f"Deletion failed: {str(e)}"
+
+    def delete_document_record(
+        self,
+        document_id: str,
+        user_id: str,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Delete only the document record from DB. Returns (success, file_path).
+        Use when delegating cleanup to Celery: delete record first so the doc
+        disappears from the UI, then enqueue cleanup task with file_path.
+        """
+        document = self.doc_repo.get_document(document_id)
+        if not document:
+            return False, None
+        if document.user_id != user_id:
+            return False, None
+        file_path = document.file_path
+        self.doc_repo.delete_document(document_id)
+        return True, file_path
+
+    def cleanup_document_data(
+        self,
+        document_id: str,
+        user_id: str,
+        file_path: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        """
+        Remove Pinecone vectors, propositions, KG triples, chunks, and file.
+        Does NOT touch the document record. Use when document record was already
+        deleted (e.g. by API) and cleanup runs in Celery.
+        """
+        try:
+            # 1. Delete from Pinecone
+            try:
+                from core.vectors import SemanticSearchService
+                search_service = SemanticSearchService()
+                search_service.delete_document_index(document_id, user_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete Pinecone vectors: {e}")
+
+            # 2. Delete propositions and KG triples
+            try:
+                from core.rag.proposition_indexer import PropositionRepository
+                from core.rag.knowledge_graph import KnowledgeGraphRepository
+                PropositionRepository().delete_document_propositions(document_id)
+                KnowledgeGraphRepository().delete_document_triples(document_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete propositions/KG: {e}")
+
+            # 3. Delete chunks
+            deleted_chunks = self.chunk_repo.delete_document_chunks(document_id)
+
+            # 4. Delete file if path provided
+            if file_path and self.storage:
+                self.storage.delete_document_file(file_path)
+
+            return True, f"Cleaned up {deleted_chunks} chunks"
+        except Exception as e:
+            logger.error(f"Failed to cleanup document data: {e}")
+            return False, str(e)
 
     def get_user_documents(
         self,
@@ -397,3 +469,51 @@ class DocumentManager:
         }
 
         return stats
+
+    def get_users_with_documents(self) -> list[tuple[str, int]]:
+        """
+        Get user IDs that have at least one ready document, with document count.
+
+        Returns:
+            List of (user_id, doc_count) sorted by doc_count descending.
+        """
+        try:
+            collection = self.doc_repo.db.get_database()["documents"]
+            pipeline = [
+                {"$match": {"processing_status": "ready"}},
+                {"$group": {"_id": "$user_id", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+            ]
+            cursor = collection.aggregate(pipeline)
+            return [(str(doc["_id"]), doc["count"]) for doc in cursor]
+        except Exception as e:
+            logger.error(f"Failed to get users with documents: {e}")
+            return []
+
+    def infer_expected_documents(self, user_id: str) -> set[str]:
+        """
+        Infer expected_documents tags from a user's document filenames and titles.
+
+        Used to auto-filter evaluation questions to those answerable from the corpus.
+        """
+        documents = self.get_user_documents(user_id)
+        inferred = set()
+        for doc in documents:
+            if doc.processing_status != DocumentStatus.READY:
+                continue
+            text = " ".join(
+                filter(None, [
+                    doc.original_filename or "",
+                    doc.title or "",
+                    " ".join(doc.tags or []),
+                ])
+            ).lower()
+            if any(kw in text for kw in ["transformer", "attention", "vaswani", "bleu"]):
+                inferred.add("transformer")
+            if any(kw in text for kw in ["textbook", "backprop", "gradient", "pca", "regularization", "cross-validation", "roc", "precision-recall"]):
+                inferred.add("textbook")
+            if any(kw in text for kw in ["lecture", "notes", "slides"]):
+                inferred.add("lecture")
+            if any(kw in text for kw in ["bert", "gpt", "llm", "language model"]):
+                inferred.add("second_paper")
+        return inferred

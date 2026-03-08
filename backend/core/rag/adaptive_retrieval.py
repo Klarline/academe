@@ -93,26 +93,28 @@ class AdaptiveRetriever:
         self, query, user_id, top_k, use_reranking, **kwargs
     ) -> List[DocumentSearchResult]:
         """
-        Definition queries: fewer, high-precision results with BM25 boost.
+        Definition queries: high-precision results with BM25 boost.
 
         "What is PCA?" → exact term matching matters.
+        Boost BM25 to catch specific technical terms that vector search
+        may conflate with related but wrong concepts.
         """
         original_bm25 = self.hybrid_search.weight_bm25
         original_vec = self.hybrid_search.weight_vector
         try:
-            self.hybrid_search.weight_bm25 = 0.4
-            self.hybrid_search.weight_vector = 0.6
+            self.hybrid_search.weight_bm25 = 0.3
+            self.hybrid_search.weight_vector = 0.7
             if use_reranking:
                 return self.hybrid_search.hybrid_search_with_reranking(
                     query=query,
                     user_id=user_id,
-                    top_k=min(top_k, 3),
+                    top_k=top_k,
                     **kwargs,
                 )
             return self.hybrid_search.hybrid_search(
                 query=query,
                 user_id=user_id,
-                top_k=min(top_k, 3),
+                top_k=top_k,
                 **kwargs,
             )
         finally:
@@ -126,22 +128,25 @@ class AdaptiveRetriever:
         Comparison queries: more diverse results from multiple sources.
 
         "PCA vs t-SNE" → need chunks covering both topics.
+        Retrieves 3x and diversifies to top_k+2 to keep both sides.
         """
+        expanded_k = top_k * 3
         if use_reranking:
             results = self.hybrid_search.hybrid_search_with_reranking(
                 query=query,
                 user_id=user_id,
-                top_k=top_k * 2,
+                top_k=expanded_k,
                 **kwargs,
             )
         else:
             results = self.hybrid_search.hybrid_search(
                 query=query,
                 user_id=user_id,
-                top_k=top_k * 2,
+                top_k=expanded_k,
                 **kwargs,
             )
-        return self._diversify(results, top_k)
+        # Return more chunks than usual to cover both sides of comparison
+        return self._diversify(results, top_k + 2)
 
     def _retrieve_code(
         self, query, user_id, top_k, use_reranking, **kwargs

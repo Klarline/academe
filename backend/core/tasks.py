@@ -287,10 +287,53 @@ def index_document_task(
         raise self.retry(exc=exc, countdown=10)
 
 
+@celery_app.task(
+    name='academe.delete_document',
+    bind=True,
+    max_retries=2,
+)
+def delete_document_task(
+    self,
+    document_id: str,
+    user_id: str,
+    file_path: str = None,
+) -> Dict[str, Any]:
+    """
+    Clean up document data in background (Pinecone, propositions, KG, chunks, file).
+    Document record should already be deleted by the API so the doc disappears
+    from the UI immediately.
+    """
+    try:
+        from core.documents import DocumentManager
+
+        logger.info(f"Cleaning up document {document_id} for user {user_id}")
+
+        doc_manager = DocumentManager()
+        success, message = doc_manager.cleanup_document_data(
+            document_id=document_id,
+            user_id=user_id,
+            file_path=file_path,
+        )
+
+        if success:
+            logger.info(f"Document {document_id} cleanup complete: {message}")
+            return {
+                "status": "success",
+                "document_id": document_id,
+                "message": message,
+            }
+        raise Exception(message)
+
+    except Exception as exc:
+        logger.error(f"Document delete cleanup failed: {exc}")
+        raise self.retry(exc=exc, countdown=10)
+
+
 # Export tasks
 __all__ = [
     'update_memory_task',
     'update_progress_task',
     'process_document_task',
-    'index_document_task'
+    'index_document_task',
+    'delete_document_task',
 ]

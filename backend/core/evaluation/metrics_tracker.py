@@ -77,7 +77,7 @@ class MetricsTracker:
         per_query_metrics: List[Dict[str, Any]],
         config: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Log a full evaluation run (e.g. from RetrievalEvaluator)."""
+        """Log a full evaluation run (e.g. from RetrievalEvaluator or RAGAS)."""
         doc = {
             "timestamp": datetime.utcnow(),
             "type": "evaluation_run",

@@ -49,10 +49,10 @@ rank-bm25>=0.2.2
 # LLM Router
 jsonschema==4.19.0
 
-# Evaluation Framework
-ragas==0.1.0
-datasets==2.14.0
-pyarrow<15.0.0  # Pin to version compatible with datasets 2.14.0
+# Evaluation Framework (RAGAS 0.2.x - use EvaluationDataset, SingleTurnSample)
+ragas>=0.2.0,<0.3
+datasets>=2.14.0
+pyarrow>=14.0.0,<18.0.0  # Compatible with ragas 0.2.x + datasets
 
 # Monitoring & Metrics
 prometheus-client==0.19.0

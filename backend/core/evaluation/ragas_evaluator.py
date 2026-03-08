@@ -16,21 +16,21 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 import json
 
-# Handle optional RAGAS import
+# Handle optional RAGAS import (0.2.x API)
 try:
-    from ragas import evaluate
+    from ragas import evaluate, EvaluationDataset, SingleTurnSample
     from ragas.metrics import (
-        faithfulness,
-        answer_relevancy,
-        context_recall,
-        context_precision
+        Faithfulness,
+        ResponseRelevancy,
+        ContextPrecision,
+        ContextRecall,
     )
-    from datasets import Dataset
     import pandas as pd
     RAGAS_AVAILABLE = True
 except ImportError:
     RAGAS_AVAILABLE = False
-    Dataset = None
+    EvaluationDataset = None
+    SingleTurnSample = None
     pd = None
 
 from core.graph.workflow import process_with_langgraph
@@ -72,12 +72,12 @@ class RAGASEvaluator:
 
         if self.use_ragas:
             self.metrics = [
-                faithfulness,
-                answer_relevancy,
-                context_recall,
-                context_precision
+                Faithfulness(),
+                ResponseRelevancy(),
+                ContextPrecision(),
+                ContextRecall(),
             ]
-            logger.info("RAGAS metrics initialized")
+            logger.info("RAGAS metrics initialized (v0.2.x)")
         else:
             self.metrics = []
             logger.info("RAGAS not available, using simplified evaluation")
@@ -87,32 +87,30 @@ class RAGASEvaluator:
     def create_test_dataset(
         self,
         test_questions: List[Dict[str, Any]]
-    ) -> Optional[Dataset]:
+    ) -> Optional[Any]:
         """
-        Create a RAGAS-compatible dataset from test questions.
+        Create a RAGAS 0.2.x compatible EvaluationDataset from test questions.
 
         Args:
-            test_questions: List of test question dictionaries
+            test_questions: List of test question dicts with question, ground_truth,
+                contexts, and optionally answer (if pre-collected).
 
         Returns:
-            Dataset object or None if RAGAS not available
+            EvaluationDataset or None if RAGAS not available
         """
-        if not self.use_ragas or not pd:
+        if not self.use_ragas or not SingleTurnSample:
             return None
 
-        # Format for RAGAS
-        formatted_data = []
-        for q in test_questions:
-            formatted_data.append({
-                "question": q["question"],
-                "ground_truth": q.get("ground_truth", ""),
-                "contexts": q.get("contexts", []),
-                "topic": q.get("topic", "general"),
-                "difficulty": q.get("difficulty", "intermediate")
-            })
-
-        df = pd.DataFrame(formatted_data)
-        return Dataset.from_pandas(df)
+        samples = [
+            SingleTurnSample(
+                user_input=q["question"],
+                response=q.get("answer", ""),
+                retrieved_contexts=q.get("contexts", []),
+                reference=q.get("ground_truth", ""),
+            )
+            for q in test_questions
+        ]
+        return EvaluationDataset(samples=samples)
 
     def evaluate_system(
         self,
@@ -183,26 +181,45 @@ class RAGASEvaluator:
                     'error': str(e)
                 })
 
-        # Run RAGAS evaluation if available
-        if self.use_ragas and pd and len(results) > 0:
+        # Run RAGAS evaluation if available (0.2.x API)
+        if self.use_ragas and SingleTurnSample and len(results) > 0:
             try:
-                # Create dataset
-                df = pd.DataFrame(results)
-                dataset = Dataset.from_pandas(df)
+                # Build EvaluationDataset from results
+                samples = [
+                    SingleTurnSample(
+                        user_input=r["question"],
+                        response=r.get("answer", ""),
+                        retrieved_contexts=r.get("contexts", []),
+                        reference=r.get("ground_truth", ""),
+                    )
+                    for r in results
+                    if "error" not in r
+                ]
+                if not samples:
+                    evaluation_summary = self._create_simple_summary(results)
+                else:
+                    dataset = EvaluationDataset(samples=samples)
 
-                # Run RAGAS metrics (use OpenAI as judge when available)
-                ragas_llm = _get_ragas_llm()
-                eval_kwargs = {"dataset": dataset, "metrics": self.metrics}
-                if ragas_llm:
-                    eval_kwargs["llm"] = ragas_llm
-                scores = evaluate(**eval_kwargs)
+                    # Run RAGAS metrics (use OpenAI as judge when available)
+                    ragas_llm = _get_ragas_llm()
+                    eval_kwargs = {"dataset": dataset, "metrics": self.metrics}
+                    if ragas_llm:
+                        eval_kwargs["llm"] = ragas_llm
+                    eval_result = evaluate(**eval_kwargs)
 
-                # Add RAGAS scores to results
-                evaluation_summary = {
-                    'ragas_scores': scores,
-                    'num_queries': len(test_queries),
-                    'timestamp': datetime.now().isoformat()
-                }
+                    # Convert EvaluationResult to dict of mean scores
+                    df = eval_result.to_pandas()
+                    metric_cols = [
+                        c for c in df.columns
+                        if c not in ("user_input", "response", "retrieved_contexts", "reference")
+                    ]
+                    scores = {col: float(df[col].mean()) for col in metric_cols}
+
+                    evaluation_summary = {
+                        "ragas_scores": scores,
+                        "num_queries": len(test_queries),
+                        "timestamp": datetime.now().isoformat(),
+                    }
 
             except Exception as e:
                 logger.error(f"RAGAS evaluation failed: {e}")

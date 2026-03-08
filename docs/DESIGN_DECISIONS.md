@@ -645,3 +645,25 @@ Plus one structural change:
 - *Pull all data into Pandas*: Works at 100 records, breaks at 100K — aggregation pipelines scale better
 - *Look up previous message for query*: Fragile (race conditions, system messages, deletions)
 - *Skip analytics, log only*: Misses the "opportunity identification" capability
+
+---
+
+## 26. Reranker Upgrade: ms-marco-MiniLM → BAAI/bge-reranker-base
+
+**Decision**: Replace ms-marco-MiniLM-L-6-v2 (66M params) with BAAI/bge-reranker-base (~278M params) for cross-encoder reranking.
+
+**Reasoning**:
+- Original reranker missed implicit relevance (e.g., "dk=dv=dmodel/h=64" implying 8 attention heads)
+- bge-reranker-base consistently outperforms ms-marco-MiniLM on MTEB reranking benchmarks
+- Context precision analysis showed relevant chunks at rank 4-5 instead of 1-2
+
+**Trade-offs**:
+- (+) Better at understanding implicit and nuanced relevance
+- (+) Improved context_precision in RAGAS evaluation
+- (-) Latency increase: ~80ms → ~150-200ms for 20 candidates
+- (-) Larger model footprint in memory
+
+**Alternatives considered**:
+- *bge-reranker-large*: Higher quality but significantly slower
+- *Cohere Rerank API*: Strong quality but adds external dependency and cost
+- *No reranker*: Simpler but measurably worse precision

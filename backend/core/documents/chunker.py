@@ -184,9 +184,16 @@ class DocumentChunker:
         return document_chunks
 
     def _preprocess_text(self, text: str) -> str:
-        """Preprocess text before chunking."""
-        # Ensure consistent spacing
-        text = re.sub(r'\s+', ' ', text)
+        """Preprocess text before chunking.
+
+        Preserves paragraph boundaries (\\n\\n) so the recursive splitter can
+        prefer paragraph splits over sentence splits, avoiding mid-sentence
+        fragments and chunks that start with stray punctuation.
+        """
+        # Collapse horizontal whitespace (spaces, tabs) but preserve newlines
+        text = re.sub(r'[ \t]+', ' ', text)
+        # Collapse 3+ newlines to 2 (keep paragraph structure)
+        text = re.sub(r'\n{3,}', '\n\n', text)
 
         # Preserve page markers
         text = re.sub(r'\[PAGE (\d+)\]', r'\n\n[PAGE \1]\n\n', text)
@@ -270,6 +277,10 @@ class DocumentChunker:
         """Clean chunk text for storage."""
         # Remove page markers from content (already extracted)
         text = re.sub(r'\[PAGE \d+\]', '', text)
+
+        # Strip leading period+space artifact from sentence-boundary splits
+        # (e.g. ". For each of these" -> "For each of these")
+        text = re.sub(r'^\.\s+', '', text)
 
         # Clean up whitespace
         text = re.sub(r'\n{3,}', '\n\n', text)

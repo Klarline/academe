@@ -58,7 +58,7 @@ Specialized AI agents handle different tasks:
 ### Advanced RAG Pipeline
 
 - **Hybrid Search**: BM25 (keyword) + vector (semantic) with weighted score fusion
-- **Cross-Encoder Reranking**: ms-marco-MiniLM re-scores candidates for precision
+- **Cross-Encoder Reranking**: BAAI/bge-reranker-base re-scores candidates for precision
 - **Adaptive Chunking**: Auto-detects document type (textbook/paper/notes/code) and adjusts chunk size
 - **Contextual Embeddings**: Document title and section prepended before embedding for richer vectors
 - **Sliding Window Context**: Adjacent chunks included in LLM context for fuller answers
@@ -202,7 +202,7 @@ For detailed architecture, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | **Vector Database** | Pinecone | Semantic search and embeddings |
 | **Database** | MongoDB 7.0 | User data, conversations, documents |
 | **Cache/Queue** | Redis 7 + Celery 5.3 | Task queue and caching |
-| **Embeddings** | Gemini embedding-001 (free tier) | Document vectorization (768d, Matryoshka) |
+| **Embeddings** | OpenAI text-embedding-3-small | Document vectorization (1536d) |
 | **LLM Provider** | Google Gemini 2.0 Flash | Primary language model |
 
 ### Frontend Stack
@@ -452,7 +452,7 @@ class WorkflowState(TypedDict, total=False):
 1. **Upload** → PDF/TXT/MD parsing with PyPDF2
 2. **Type Detection** → Auto-classify as textbook, paper, notes, or code from content signals
 3. **Adaptive Chunking** → Per-type chunk size (textbook 1200, paper 800, notes 600) with optional parent-child split
-4. **Contextual Embedding** → Prepend document title + section before embedding with Gemini embedding-001 (768 dims, free tier)
+4. **Contextual Embedding** → Prepend document title + section before embedding with OpenAI text-embedding-3-small (1536 dims)
 5. **Proposition Extraction** → Decompose chunks into atomic factual statements for fine-grained retrieval
 6. **Knowledge Graph Extraction** → Extract entity-relationship triples (subject → predicate → object) from chunks
 7. **Storage** → Pinecone vector database with chunk metadata; propositions and KG triples in MongoDB
@@ -464,7 +464,7 @@ class WorkflowState(TypedDict, total=False):
 4. **Multi-Query Expansion** → Generate 3 alternative phrasings, retrieve for each, merge results
 5. **Adaptive Retrieval** → Query-type-aware BM25/vector weights (definition, comparison, code, procedural)
 6. **Hybrid Search** → BM25 (30%) + vector (70%) weighted score fusion
-7. **Cross-Encoder Reranking** → ms-marco-MiniLM-L-6-v2 re-scores top-20 → top-5
+7. **Cross-Encoder Reranking** → BAAI/bge-reranker-base re-scores top-20 → top-5
 8. **Self-RAG Verification** → LLM judges context sufficiency; reformulates + retries if insufficient
 9. **Context Expansion** → Sliding window (±1 neighbor chunks) or parent-child expansion
 10. **Knowledge Graph Augmentation** → Multi-hop graph traversal adds related facts to LLM context
@@ -492,7 +492,7 @@ class WorkflowState(TypedDict, total=False):
 - `knowledge_graph`: Entity-relationship triples for multi-hop reasoning
 
 **Pinecone Index**:
-- Dimensions: 768 (Gemini embedding-001 with Matryoshka truncation)
+- Dimensions: 1536 (OpenAI text-embedding-3-small)
 - Metric: Cosine similarity
 - Metadata: document_id, page_number, chunk_text, source
 
@@ -524,8 +524,8 @@ class WorkflowState(TypedDict, total=False):
 **Hybrid Search**:
 - BM25 for keyword matching (lazy-built, in-memory cached per user)
 - Vector similarity for semantic search (contextual embeddings with doc title + section prefix)
-- Weighted score fusion (0.3 BM25 + 0.7 vector) — tunable per query type via AdaptiveRetriever
-- Cross-encoder reranking (ms-marco-MiniLM-L-6-v2) for final precision
+- Weighted score fusion (0.1 BM25 + 0.9 vector) — tunable per query type via AdaptiveRetriever
+- Cross-encoder reranking (BAAI/bge-reranker-base) for final precision
 
 **Query Optimization**:
 - LLM-based query rewriting to resolve pronouns and expand abbreviations

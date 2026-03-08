@@ -1,0 +1,312 @@
+{
+  "version": "1.0",
+  "description": "Academe RAG evaluation benchmark - hand-curated questions across 5 query types (ambiguous and code-implementation removed)",
+  "documents_expected": [
+    "Transformer paper (Attention Is All You Need)",
+    "ML textbook chapter (e.g., backprop, optimization)",
+    "Lecture notes (ML/DL concepts)",
+    "Second research paper (e.g., BERT, GPT, or related)"
+  ],
+  "query_types": {
+    "factual": "Direct factual questions with specific answers in the documents",
+    "conceptual": "Explain concepts, mechanisms, or why something works",
+    "comparison": "Compare two or more concepts, methods, or architectures",
+    "cross_document": "Requires information from multiple documents",
+    "procedural": "Step-by-step algorithm or pipeline explanation (answerable from papers, no code implementation)"
+  },
+  "questions": [
+    {
+      "id": "Q001",
+      "question": "What BLEU scores did the Transformer achieve on English-to-German and English-to-French machine translation?",
+      "ground_truth": "The Transformer achieved 28.4 BLEU on English-to-German and 41.0 BLEU on English-to-French translation, establishing new state-of-the-art results.",
+      "query_type": "factual",
+      "difficulty": "easy",
+      "hard_case": "none",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q002",
+      "question": "How many attention heads does the base Transformer model use?",
+      "ground_truth": "The base Transformer model uses 8 attention heads.",
+      "query_type": "factual",
+      "difficulty": "easy",
+      "hard_case": "none",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q003",
+      "question": "What is the model dimension (d_model) in the Transformer architecture?",
+      "ground_truth": "The Transformer uses d_model = 512 for the base model.",
+      "query_type": "factual",
+      "difficulty": "easy",
+      "hard_case": "none",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q004",
+      "question": "What activation function is used in the Transformer's feed-forward sublayer?",
+      "ground_truth": "The Transformer uses ReLU (rectified linear unit) activation in the feed-forward sublayer.",
+      "query_type": "factual",
+      "difficulty": "medium",
+      "hard_case": "none",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q005",
+      "question": "What is the dropout rate used in the Transformer paper?",
+      "ground_truth": "The Transformer paper uses a dropout rate of 0.1.",
+      "query_type": "factual",
+      "difficulty": "medium",
+      "hard_case": "none",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q006",
+      "question": "How many encoder and decoder layers does the base Transformer have?",
+      "ground_truth": "The base Transformer has 6 encoder layers and 6 decoder layers.",
+      "query_type": "factual",
+      "difficulty": "easy",
+      "hard_case": "none",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q007",
+      "question": "Why does self-attention allow for more parallelization compared to recurrent models?",
+      "ground_truth": "Self-attention connects all positions with a constant number of sequential operations (O(1)), while recurrent layers require O(n) sequential operations to process a sequence of length n. This allows the Transformer to compute representations for all positions in parallel.",
+      "query_type": "conceptual",
+      "difficulty": "medium",
+      "hard_case": "none",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q008",
+      "question": "What is the purpose of positional encoding in the Transformer?",
+      "ground_truth": "Since the Transformer contains no recurrence or convolution, it has no inherent notion of sequence order. Positional encodings are added to the input embeddings to inject information about the position of each token in the sequence, typically using sine and cosine functions of different frequencies.",
+      "query_type": "conceptual",
+      "difficulty": "medium",
+      "hard_case": "none",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q009",
+      "question": "How does multi-head attention work and why is it beneficial?",
+      "ground_truth": "Multi-head attention runs multiple attention functions in parallel. Each head uses different learned linear projections of queries, keys, and values. The outputs are concatenated and projected. This allows the model to jointly attend to information from different representation subspaces at different positions.",
+      "query_type": "conceptual",
+      "difficulty": "medium",
+      "hard_case": "none",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q010",
+      "question": "Explain the bias-variance tradeoff in machine learning.",
+      "ground_truth": "The bias-variance tradeoff describes the balance between two sources of error: Bias (error from wrong assumptions, causing underfitting) and Variance (error from sensitivity to training data, causing overfitting). Total error = Bias\u00b2 + Variance + Irreducible noise. Simple models have high bias, low variance; complex models have low bias, high variance.",
+      "query_type": "conceptual",
+      "difficulty": "medium",
+      "hard_case": "none",
+      "expected_documents": [
+        "textbook",
+        "lecture"
+      ]
+    },
+    {
+      "id": "Q011",
+      "question": "What is the vanishing gradient problem and how can it be addressed?",
+      "ground_truth": "Vanishing gradients occur when gradients become exponentially small in deep networks, preventing lower layers from learning. Solutions include: ReLU activation (non-saturating), batch normalization, residual connections, LSTM/GRU for RNNs, and careful weight initialization (Xavier/He).",
+      "query_type": "conceptual",
+      "difficulty": "medium",
+      "hard_case": "none",
+      "expected_documents": [
+        "textbook",
+        "lecture"
+      ]
+    },
+    {
+      "id": "Q012",
+      "question": "What is the purpose of the residual connection and layer normalization in each Transformer sublayer?",
+      "ground_truth": "Residual connections allow gradients to flow directly through the network, mitigating the vanishing gradient problem. Layer normalization stabilizes training by normalizing inputs across the feature dimension. Each sublayer uses LayerNorm(x + Sublayer(x)), enabling deeper networks to train effectively.",
+      "query_type": "conceptual",
+      "difficulty": "medium",
+      "hard_case": "multi_chunk",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q013",
+      "question": "How does the Transformer architecture differ from RNNs and why might it be better for sequence modeling?",
+      "ground_truth": "The Transformer is based solely on attention mechanisms, dispensing with recurrence and convolutions. Unlike RNNs which process sequences sequentially, the Transformer allows parallelization. It also avoids the vanishing gradient problem in long sequences and can model long-range dependencies more effectively through self-attention.",
+      "query_type": "comparison",
+      "difficulty": "medium",
+      "hard_case": "none",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q014",
+      "question": "Compare the encoder and decoder stacks in the Transformer. What are the key differences?",
+      "ground_truth": "The encoder has self-attention and feed-forward sublayers. The decoder has the same plus a third sublayer that performs encoder-decoder attention over the encoder output. The decoder uses masked self-attention to prevent attending to future positions during training.",
+      "query_type": "comparison",
+      "difficulty": "medium",
+      "hard_case": "multi_chunk",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q015",
+      "question": "Compare SGD, Momentum, and Adam optimizers. When would you use each?",
+      "ground_truth": "SGD updates weights using the current gradient only. Momentum adds a fraction of the previous update, accelerating convergence. Adam combines momentum with adaptive learning rates per parameter. SGD sometimes generalizes better; Adam often converges faster. Use Adam for quick experimentation, SGD for final training when generalization matters.",
+      "query_type": "comparison",
+      "difficulty": "medium",
+      "hard_case": "none",
+      "expected_documents": [
+        "textbook",
+        "lecture"
+      ]
+    },
+    {
+      "id": "Q016",
+      "question": "Compare PCA and t-SNE for dimensionality reduction. What are their strengths and limitations?",
+      "ground_truth": "PCA is linear, preserves global structure, fast, and deterministic. t-SNE is non-linear, preserves local neighborhoods, slow, and stochastic. PCA is good for preprocessing; t-SNE is better for 2D/3D visualization. PCA finds orthogonal axes of maximum variance; t-SNE minimizes KL divergence between probability distributions.",
+      "query_type": "comparison",
+      "difficulty": "medium",
+      "hard_case": "none",
+      "expected_documents": [
+        "textbook",
+        "lecture"
+      ]
+    },
+    {
+      "id": "Q017",
+      "question": "Compare L1 and L2 regularization. How do they affect the model differently?",
+      "ground_truth": "L1 (Lasso) adds |w| penalty, promotes sparsity by driving weights to exactly zero, useful for feature selection. L2 (Ridge) adds w\u00b2 penalty, shrinks weights uniformly but keeps them non-zero, handles correlated features better. L1 produces non-differentiable objective at zero; L2 has closed-form solution. Elastic Net combines both.",
+      "query_type": "comparison",
+      "difficulty": "medium",
+      "hard_case": "none",
+      "expected_documents": [
+        "textbook",
+        "lecture"
+      ]
+    },
+    {
+      "id": "Q018",
+      "question": "How do the attention mechanisms in the Transformer encoder differ from those in the decoder?",
+      "ground_truth": "Encoder uses bidirectional self-attention (each position attends to all positions). Decoder uses masked self-attention (each position attends only to previous positions) plus encoder-decoder attention (decoder attends to encoder output). The masking ensures autoregressive generation during training.",
+      "query_type": "comparison",
+      "difficulty": "hard",
+      "hard_case": "multi_chunk",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q019",
+      "question": "Summarize the key architectural innovations in the Transformer and how they relate to training efficiency.",
+      "ground_truth": "Key innovations: (1) Self-attention enables parallel computation vs sequential RNNs. (2) Multi-head attention captures different representation subspaces. (3) Positional encodings inject sequence order without recurrence. (4) Residual connections and layer norm enable deep networks. Together these allow faster training on larger datasets.",
+      "query_type": "cross_document",
+      "difficulty": "hard",
+      "hard_case": "multi_chunk",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q020",
+      "question": "What training techniques from the Transformer paper are commonly used in modern language models?",
+      "ground_truth": "Techniques that became standard: Adam optimizer with warmup, label smoothing, dropout, residual connections, layer normalization, sinusoidal positional encodings, multi-head attention. The overall encoder-decoder with attention architecture influenced BERT, GPT, and subsequent models.",
+      "query_type": "cross_document",
+      "difficulty": "hard",
+      "hard_case": "multi_chunk",
+      "expected_documents": [
+        "transformer",
+        "second_paper"
+      ]
+    },
+    {
+      "id": "Q021",
+      "question": "How does the scaled dot-product attention formula work and why is scaling necessary?",
+      "ground_truth": "Attention(Q,K,V) = softmax(QK^T / sqrt(d_k))V. The dot products are scaled by sqrt(d_k) because without scaling, for large d_k the dot products grow large, pushing softmax into regions of extremely small gradients and making training difficult.",
+      "query_type": "cross_document",
+      "difficulty": "medium",
+      "hard_case": "none",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q028",
+      "question": "Explain the scaled dot-product attention computation step by step.",
+      "ground_truth": "Step 1: Compute attention scores by taking the dot product of queries and keys: QK^T. Step 2: Scale by sqrt(d_k) to prevent large dot products from pushing softmax into small-gradient regions. Step 3: Apply softmax to get attention weights. Step 4: Multiply weights by values V to get the output. Formula: Attention(Q,K,V) = softmax(QK^T / sqrt(d_k))V.",
+      "query_type": "procedural",
+      "difficulty": "medium",
+      "hard_case": "none",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q031",
+      "question": "Describe the step-by-step training procedure for the Transformer model.",
+      "ground_truth": "Training procedure: (1) Prepare parallel source-target pairs. (2) Encode source with encoder. (3) Decode autoregressively: at each step, decoder attends to encoder output and previous decoder outputs. (4) Use cross-entropy loss with label smoothing. (5) Adam optimizer with warmup (inverse sqrt schedule). (6) Dropout for regularization.",
+      "query_type": "procedural",
+      "difficulty": "medium",
+      "hard_case": "multi_chunk",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q033",
+      "question": "What is the formula for the feed-forward sublayer in the Transformer?",
+      "ground_truth": "FFN(x) = max(0, xW1 + b1)W2 + b2. It is a two-layer linear transformation with ReLU activation in between. The inner dimension is typically 4x the model dimension (2048 for d_model=512). Applied position-wise to each position independently.",
+      "query_type": "procedural",
+      "difficulty": "medium",
+      "hard_case": "none",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q034",
+      "question": "Explain the full encoder-decoder pipeline from input tokens to output probabilities.",
+      "ground_truth": "Input tokens \u2192 embedding + positional encoding \u2192 6 encoder layers (self-attention + FFN, with residuals and LayerNorm) \u2192 encoder output. Decoder: output tokens \u2192 embedding + positional encoding \u2192 6 decoder layers (masked self-attention + encoder-decoder attention + FFN) \u2192 linear projection \u2192 softmax \u2192 output probabilities.",
+      "query_type": "procedural",
+      "difficulty": "hard",
+      "hard_case": "multi_chunk",
+      "expected_documents": [
+        "transformer"
+      ]
+    },
+    {
+      "id": "Q036",
+      "question": "When should you use ROC-AUC vs precision-recall curves?",
+      "ground_truth": "Use ROC-AUC for balanced datasets or when both classes matter equally. Use precision-recall for imbalanced datasets where the positive class is rare and more important. ROC can be overly optimistic on imbalanced data; PR curves focus on positive class performance.",
+      "query_type": "conceptual",
+      "difficulty": "medium",
+      "hard_case": "none",
+      "expected_documents": [
+        "textbook",
+        "lecture"
+      ]
+    }
+  ]
+}
