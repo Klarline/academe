@@ -632,8 +632,9 @@ Plus one structural change:
 - `rag_responses` collection: stores `(message_id, user_id, query, answer, sources)` at response time — single lookup for feedback, no fragile "find previous message" logic
 - `POST /api/v1/chat/feedback`: accepts `{message_id, rating, comment}`, looks up `rag_responses`, calls `RetrievalFeedback.record()`
 - `FeedbackButtons.tsx`: thumbs up/down on assistant messages, wired via RTK Query
-- `RAGAnalytics`: `satisfaction_trends()`, `weak_documents()`, `query_type_performance()`, `generate_report()` with actionable recommendations
-- `GET /api/v1/analytics/report`: exposes analytics scoped to authenticated user
+- `RAGAnalytics`: `satisfaction_trends()`, `weak_documents()`, `query_type_performance()`, `cache_performance()`, `generate_report()` with actionable recommendations
+- `GET /api/v1/analytics/report`: exposes analytics scoped to authenticated user; includes `cache_performance` section with hit rate, hits, misses, and low-hit-rate recommendations
+- Prometheus counters: `academe_cache_hits_total`, `academe_cache_misses_total`, `academe_cache_entries` (labeled by `backend=memory|redis`) auto-exposed at `/metrics` for Grafana dashboards
 
 **Trade-offs**:
 - (+) Closed-loop quality improvement — weak documents and failing query types identified automatically

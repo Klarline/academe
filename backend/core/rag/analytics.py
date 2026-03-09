@@ -242,6 +242,15 @@ class RAGAnalytics:
             for k, v in stage_totals.items()
         ])
 
+    def cache_performance(self) -> Dict[str, Any]:
+        """
+        Return process-global cache hit/miss metrics.
+
+        Reads from Prometheus counters (shared across all pipeline instances).
+        """
+        from core.rag.response_cache import get_cache_metrics
+        return get_cache_metrics()
+
     def generate_report(
         self,
         days: int = 30,
@@ -254,6 +263,7 @@ class RAGAnalytics:
         weak_df = self.weak_documents(user_id=user_id)
         query_type_df = self.query_type_performance(user_id=user_id, days=days)
         stage_df = self.stage_value_summary()
+        cache_stats = self.cache_performance()
 
         # Trend detection: declining if rolling rate drops > 5% over last 7 days
         declining = False
@@ -277,6 +287,12 @@ class RAGAnalytics:
                 f"Query type '{worst['query_type']}' underperforms "
                 f"(sat_rate={worst['sat_rate']:.2f}); consider retrieval tuning."
             )
+        if cache_stats["total_lookups"] >= 20 and cache_stats["hit_rate"] < 0.10:
+            recommendations.append(
+                f"Cache hit rate is low ({cache_stats['hit_rate']:.1%} over "
+                f"{cache_stats['total_lookups']} lookups); users may be asking "
+                f"diverse questions or cache TTL may be too short."
+            )
 
         return {
             "period_days": days,
@@ -285,6 +301,7 @@ class RAGAnalytics:
             "weak_documents": weak_df.to_dict(orient="records") if not weak_df.empty else [],
             "query_type_performance": query_type_df.to_dict(orient="records") if not query_type_df.empty else [],
             "stage_value_summary": stage_df.to_dict(orient="records") if not stage_df.empty else [],
+            "cache_performance": cache_stats,
             "satisfaction_declining": declining,
             "recommendations": recommendations,
         }

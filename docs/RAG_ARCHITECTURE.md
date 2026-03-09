@@ -219,7 +219,7 @@ backend/core/
 │   ├── stage_metrics.py         # Per-stage value metrics (RequestMetrics + AggregateMetrics)
 │   ├── proposition_indexer.py   # PropositionExtractor + PropositionRepository: atomic fact indexing
 │   ├── knowledge_graph.py       # KGExtractor + KnowledgeGraphTraverser: entity-rel extraction + multi-hop
-│   └── analytics.py             # RAGAnalytics: Pandas + MongoDB aggregation for quality insights
+│   └── analytics.py             # RAGAnalytics: Pandas + MongoDB aggregation + cache hit rate for quality insights
 ├── vectors/
 │   ├── hybrid_search.py         # HybridSearchService: BM25+vector fusion
 │   ├── search.py                # SemanticSearchService + cross-encoder reranking + contextual embeddings
@@ -251,5 +251,5 @@ backend/mcp_servers/
 
 backend/api/v1/endpoints/
 ├── chat.py                      # Chat + POST /feedback endpoint (links to rag_responses)
-└── analytics.py                 # GET /report — RAG analytics via RAGAnalytics
+└── analytics.py                 # GET /report — RAG analytics via RAGAnalytics (includes cache hit rate)
 ```

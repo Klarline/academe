@@ -17,6 +17,32 @@ from typing import Dict, List, Optional, Tuple, Any
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Process-global Prometheus counters (shared across all cache instances)
+# ---------------------------------------------------------------------------
+
+try:
+    from prometheus_client import Counter, Gauge
+
+    CACHE_HITS = Counter(
+        "academe_cache_hits_total",
+        "Total semantic response cache hits",
+        ["backend"],  # "memory" or "redis"
+    )
+    CACHE_MISSES = Counter(
+        "academe_cache_misses_total",
+        "Total semantic response cache misses",
+        ["backend"],
+    )
+    CACHE_ENTRIES = Gauge(
+        "academe_cache_entries",
+        "Current number of cached entries",
+        ["backend"],
+    )
+    _PROM_AVAILABLE = True
+except ImportError:
+    _PROM_AVAILABLE = False
+
 
 class CacheEntry:
     __slots__ = ("query", "embedding", "answer", "sources", "created_at")
@@ -109,6 +135,8 @@ class SemanticResponseCache:
 
         if best_entry and best_score >= self.similarity_threshold:
             self._hits += 1
+            if _PROM_AVAILABLE:
+                CACHE_HITS.labels(backend="memory").inc()
             logger.info(
                 "Cache HIT (user=%s, score=%.3f): '%s' matched '%s'",
                 user_id[:8], best_score, query[:40], best_entry.query[:40],
@@ -116,6 +144,8 @@ class SemanticResponseCache:
             return best_entry.answer, best_entry.sources
 
         self._misses += 1
+        if _PROM_AVAILABLE:
+            CACHE_MISSES.labels(backend="memory").inc()
         return None
 
     def put(
@@ -156,6 +186,8 @@ class SemanticResponseCache:
             "Cache PUT (user=%s): '%s' (size=%d)",
             user_id[:8], query[:40], len(self._entries[user_id]),
         )
+        if _PROM_AVAILABLE:
+            CACHE_ENTRIES.labels(backend="memory").set(self.size)
 
     def invalidate(self, user_id: Optional[str] = None) -> int:
         """
@@ -335,11 +367,15 @@ class RedisResponseCache:
                         "Redis cache HIT (user=%s, score=%.3f): '%s'",
                         user_id[:8], best_score, query[:40],
                     )
+                    if _PROM_AVAILABLE:
+                        CACHE_HITS.labels(backend="redis").inc()
                     return entry["answer"], entry["sources"]
 
         except Exception as e:
             logger.warning("Redis cache get failed: %s", e)
 
+        if _PROM_AVAILABLE:
+            CACHE_MISSES.labels(backend="redis").inc()
         return None
 
     def put(
@@ -452,3 +488,46 @@ class RedisResponseCache:
             self._redis.hdel(emb_key, oldest_key)
         except Exception as e:
             logger.warning("Redis eviction failed: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Global cache stats for analytics / monitoring
+# ---------------------------------------------------------------------------
+
+def get_cache_metrics() -> Dict[str, Any]:
+    """
+    Return process-global cache metrics from Prometheus counters.
+
+    Safe to call from RAGAnalytics or any monitoring endpoint.
+    Returns zeros if prometheus_client is not installed.
+    """
+    if not _PROM_AVAILABLE:
+        return {
+            "memory_hits": 0,
+            "memory_misses": 0,
+            "redis_hits": 0,
+            "redis_misses": 0,
+            "total_hits": 0,
+            "total_misses": 0,
+            "total_lookups": 0,
+            "hit_rate": 0.0,
+        }
+
+    mem_hits = CACHE_HITS.labels(backend="memory")._value.get()
+    mem_misses = CACHE_MISSES.labels(backend="memory")._value.get()
+    redis_hits = CACHE_HITS.labels(backend="redis")._value.get()
+    redis_misses = CACHE_MISSES.labels(backend="redis")._value.get()
+    total_hits = mem_hits + redis_hits
+    total_misses = mem_misses + redis_misses
+    total = total_hits + total_misses
+
+    return {
+        "memory_hits": int(mem_hits),
+        "memory_misses": int(mem_misses),
+        "redis_hits": int(redis_hits),
+        "redis_misses": int(redis_misses),
+        "total_hits": int(total_hits),
+        "total_misses": int(total_misses),
+        "total_lookups": int(total),
+        "hit_rate": total_hits / total if total > 0 else 0.0,
+    }

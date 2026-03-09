@@ -122,5 +122,7 @@ class TestRAGAnalytics:
         assert "satisfaction_trends" in report
         assert "weak_documents" in report
         assert "query_type_performance" in report
+        assert "cache_performance" in report
+        assert "hit_rate" in report["cache_performance"]
         assert "recommendations" in report
         assert "satisfaction_declining" in report

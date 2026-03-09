@@ -253,6 +253,7 @@ Developer Push to GitHub
 │  │  • Error rate                                     │ │
 │  │  • Requests in progress                          │ │
 │  │  • Status codes                                   │ │
+│  │  • Cache hits/misses (per backend)               │ │
 │  └────────────────────────────────────────────────────┘ │
 │                        │                                 │
 │                        ▼                                 │

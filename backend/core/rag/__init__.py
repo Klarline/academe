@@ -3,7 +3,7 @@
 from .pipeline import RAGPipeline
 from .adaptive_retrieval import AdaptiveRetriever, classify_query, QueryType
 from .query_rewriter import QueryRewriter, HyDE
-from .response_cache import SemanticResponseCache, RedisResponseCache
+from .response_cache import SemanticResponseCache, RedisResponseCache, get_cache_metrics
 from .self_rag import SelfRAGController, RetrievalVerifier
 from .query_decomposer import QueryDecomposer
 from .feedback import RetrievalFeedback
@@ -34,6 +34,7 @@ __all__ = [
     "HyDE",
     "SemanticResponseCache",
     "RedisResponseCache",
+    "get_cache_metrics",
     "SelfRAGController",
     "RetrievalVerifier",
     "QueryDecomposer",

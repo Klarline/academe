@@ -79,7 +79,7 @@ Specialized AI agents handle different tasks:
 - **Knowledge Mode**: Falls back to LLM general knowledge when documents don't cover the topic
 - **arXiv Fallback**: Research agent searches arXiv papers when no documents are uploaded or RAG retrieval fails
 - **End-to-End Feedback Loop**: Frontend thumbs up/down → feedback API → MongoDB → Pandas analytics identifying weak documents and underperforming query types
-- **RAG Analytics (Pandas)**: MongoDB aggregation pipelines + Pandas for satisfaction trends, weak document detection, query type performance, and actionable recommendations
+- **RAG Analytics (Pandas)**: MongoDB aggregation pipelines + Pandas for satisfaction trends, weak document detection, query type performance, cache hit rate, and actionable recommendations
 - **arXiv MCP Server**: Standalone MCP tool server exposing paper search for external clients (Claude Desktop, etc.)
 
 ### Personalized Learning
@@ -694,7 +694,7 @@ GET    /metrics                     # Prometheus metrics
 
 **Analytics**:
 ```
-GET    /api/v1/analytics/report    # RAG performance report (satisfaction, weak docs, recommendations)
+GET    /api/v1/analytics/report    # RAG performance report (satisfaction, weak docs, cache hit rate, recommendations)
 ```
 
 ---
@@ -742,7 +742,7 @@ NEXT_PUBLIC_WS_URL=ws://localhost:8000          # WebSocket URL
 - `http_requests_total`: Total requests by endpoint and status
 - `http_request_duration_seconds`: Latency percentiles (p50, p95, p99)
 - `http_requests_in_progress`: Concurrent requests
-- Custom: Agent selection distribution, RAG retrieval times
+- Custom: Agent selection distribution, RAG retrieval times, cache hit/miss rates (`academe_cache_hits_total`, `academe_cache_misses_total`, `academe_cache_entries`)
 
 ### Health Checks
 

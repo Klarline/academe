@@ -52,7 +52,7 @@ default in the `balanced` retrieval profile.
 | **Multi-query expansion**        | Generates alternative phrasings of the same query for broader recall                                                | `core/rag/query_rewriter.py`                    |
 | **Self-RAG (corrective RAG)**    | LLM judge verifies whether retrieved context is sufficient; reformulates and retries if not                         | `core/rag/self_rag.py`                          |
 | **Retrieval feedback loop**      | End-to-end: frontend thumbs up/down → feedback API → MongoDB → analytics                                           | `core/rag/feedback.py`, `api/v1/endpoints/chat.py`, `FeedbackButtons.tsx` |
-| **RAG analytics (Pandas)**       | MongoDB aggregation + Pandas for satisfaction trends, weak doc detection, query type performance                    | `core/rag/analytics.py`, `api/v1/endpoints/analytics.py` |
+| **RAG analytics (Pandas)**       | MongoDB aggregation + Pandas for satisfaction trends, weak doc detection, query type performance, cache hit rate    | `core/rag/analytics.py`, `api/v1/endpoints/analytics.py` |
 | **arXiv fallback**               | Research agent searches arXiv papers when no documents uploaded or RAG retrieval fails                              | `core/agents/research_agent.py`, `mcp_servers/arxiv_server.py` |
 | **Streaming responses**          | Token-by-token SSE streaming with per-agent progress events                                                         | `core/graph/workflow.py`, `backend/api/routes/` |
 
