@@ -52,40 +52,64 @@ class TestSemanticResponseCache:
         from core.rag.response_cache import SemanticResponseCache
         cache = SemanticResponseCache(similarity_threshold=0.99)
         emb = [1.0, 0.0, 0.0]
-        cache.put("What is PCA?", emb, "PCA is ...", [])
-        result = cache.get("What is PCA?", emb)
+        cache.put("u1", "What is PCA?", emb, "PCA is ...", [])
+        result = cache.get("u1", "What is PCA?", emb)
         assert result is not None
         assert result[0] == "PCA is ..."
 
     def test_miss_on_different_embedding(self):
         from core.rag.response_cache import SemanticResponseCache
         cache = SemanticResponseCache(similarity_threshold=0.99)
-        cache.put("What is PCA?", [1.0, 0.0, 0.0], "PCA is ...", [])
-        result = cache.get("Unrelated", [0.0, 1.0, 0.0])
+        cache.put("u1", "What is PCA?", [1.0, 0.0, 0.0], "PCA is ...", [])
+        result = cache.get("u1", "Unrelated", [0.0, 1.0, 0.0])
         assert result is None
 
     def test_ttl_expiry(self):
         from core.rag.response_cache import SemanticResponseCache
         cache = SemanticResponseCache(similarity_threshold=0.9, ttl_seconds=1)
         emb = [1.0, 0.0, 0.0]
-        cache.put("q", emb, "answer", [])
+        cache.put("u1", "q", emb, "answer", [])
         time.sleep(1.1)
-        assert cache.get("q", emb) is None
+        assert cache.get("u1", "q", emb) is None
 
     def test_max_entries_eviction(self):
         from core.rag.response_cache import SemanticResponseCache
         cache = SemanticResponseCache(max_entries=3, ttl_seconds=0)
         for i in range(5):
-            cache.put(f"q{i}", [float(i), 0.0, 0.0], f"a{i}", [])
+            cache.put("u1", f"q{i}", [float(i), 0.0, 0.0], f"a{i}", [])
         assert cache.size <= 3
 
     def test_invalidate(self):
         from core.rag.response_cache import SemanticResponseCache
         cache = SemanticResponseCache()
-        cache.put("q", [1.0], "a", [])
-        count = cache.invalidate()
+        cache.put("u1", "q", [1.0], "a", [])
+        count = cache.invalidate("u1")
         assert count == 1
         assert cache.size == 0
+
+    def test_user_isolation(self):
+        from core.rag.response_cache import SemanticResponseCache
+        cache = SemanticResponseCache(similarity_threshold=0.99)
+        emb = [1.0, 0.0, 0.0]
+        cache.put("user_a", "What is PCA?", emb, "PCA from user A docs", [])
+        # Same query from different user should miss
+        result = cache.get("user_b", "What is PCA?", emb)
+        assert result is None
+        # Same user should hit
+        result = cache.get("user_a", "What is PCA?", emb)
+        assert result is not None
+        assert result[0] == "PCA from user A docs"
+
+    def test_invalidate_per_user(self):
+        from core.rag.response_cache import SemanticResponseCache
+        cache = SemanticResponseCache(similarity_threshold=0.99)
+        cache.put("u1", "q", [1.0, 0.0], "a1", [])
+        cache.put("u2", "q", [1.0, 0.0], "a2", [])
+        assert cache.size == 2
+        cache.invalidate("u1")
+        assert cache.size == 1
+        assert cache.get("u1", "q", [1.0, 0.0]) is None
+        assert cache.get("u2", "q", [1.0, 0.0]) is not None
 
 
 # ---------------------------------------------------------------------------

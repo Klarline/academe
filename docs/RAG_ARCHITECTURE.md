@@ -88,7 +88,7 @@ Six layers of retrieval for best precision:
 
 | Layer | Component | Purpose |
 |-------|-----------|---------|
-| 1 | **SemanticResponseCache** | Skip retrieval entirely for similar past queries |
+| 1 | **SemanticResponseCache** | Skip retrieval entirely for similar past queries (per-user scoped) |
 | 2 | **QueryDecomposer** | Split complex questions into atomic sub-queries |
 | 3 | **Multi-query generation** | 3 phrasings per query for broader recall |
 | 4 | **AdaptiveRetriever** | Query-type-aware BM25/vector weight tuning |
@@ -98,7 +98,7 @@ Six layers of retrieval for best precision:
 
 ### 3. Search Flow Detail
 
-1. **Response cache check** — If a semantically similar query was answered recently, return cached result
+1. **Response cache check** — If a semantically similar query was answered recently for this user, return cached result
 2. **Query rewriting** — LLM resolves pronouns and expands abbreviations using conversation history
 3. **Query decomposition** — Complex multi-part questions split into atomic sub-queries
 4. **Multi-query expansion** — Generate 3 alternative phrasings, retrieve for each, merge results
@@ -110,7 +110,7 @@ Six layers of retrieval for best precision:
 10. **Context expansion** — Sliding window (±1 adjacent chunks) or parent-child (expand child→parent)
 11. **Knowledge graph augmentation** — Multi-hop traversal from query entities through extracted triples adds related facts
 12. **LLM generation** — Answer grounded in expanded context + KG relationships
-13. **Cache result** — Store answer for future similar queries (reuses query embedding from step 1 to avoid double embedding)
+13. **Cache result** — Store answer in user's cache partition for future similar queries (reuses query embedding from step 1 to avoid double embedding)
 
 ### 3.1 HyDE (Hypothetical Document Embeddings)
 
@@ -150,7 +150,7 @@ MongoDB "retrieval_feedback" →  User thumbs up/down on RAG answers
 MongoDB "rag_responses"      →  Query/answer/sources per message (feedback linkage)
 MongoDB "propositions"       →  Atomic facts with source chunk back-references
 MongoDB "knowledge_graph"    →  Entity-relationship triples for multi-hop reasoning
-In-memory cache              →  Semantic response cache (query embedding → answer)
+In-memory cache              →  Semantic response cache (per-user: user_id + query embedding → answer)
 ```
 
 ## Agent Workflow Graph (LangGraph)
@@ -209,7 +209,7 @@ backend/core/
 │   ├── pipeline.py              # RAGPipeline: cache → decompose → multi-query → adaptive → self-rag → generate
 │   ├── adaptive_retrieval.py    # AdaptiveRetriever: query-type routing (wired into pipeline)
 │   ├── query_rewriter.py        # QueryRewriter (LLM) + HyDE + multi-query generation
-│   ├── response_cache.py        # SemanticResponseCache: cosine similarity lookup, TTL, eviction
+│   ├── response_cache.py        # SemanticResponseCache + RedisResponseCache: per-user cosine similarity lookup, TTL, eviction, hit/miss stats
 │   ├── self_rag.py              # RetrievalVerifier + SelfRAGController: verify → reformulate → retry
 │   ├── query_decomposer.py      # QueryDecomposer: split complex questions into sub-queries
 │   ├── feedback.py              # RetrievalFeedback: thumbs up/down, weak doc detection, stats

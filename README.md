@@ -66,7 +66,7 @@ Specialized AI agents handle different tasks:
 - **Self-RAG**: LLM verifies retrieval quality; reformulates and retries if context is insufficient
 - **Query Decomposition**: Complex multi-part questions split into atomic sub-queries for better coverage
 - **Multi-Query Expansion**: 3 alternative phrasings per query for broader recall
-- **Semantic Response Cache**: Similar past queries return cached answers instantly (~1ms vs ~1s)
+- **Semantic Response Cache**: Per-user scoped; similar past queries return cached answers instantly (~1ms vs ~1s)
 - **Retrieval Feedback Loop**: Thumbs up/down tracking identifies weak queries and documents
 - **Proposition-Based Indexing**: Chunks decomposed into atomic factual statements for precise retrieval
 - **Knowledge Graph**: Entity-relationship extraction with multi-hop graph traversal across documents
@@ -74,7 +74,7 @@ Specialized AI agents handle different tasks:
 - **Request Budget**: Per-query caps on LLM calls, retries, and latency prevent cost/latency explosions
 - **Deterministic Fallback**: Ordered degradation chain for every external dependency (LLM, reranker, Pinecone)
 - **Per-Stage Value Metrics**: Tracks whether each pipeline stage changed the result, with aggregate counters
-- **Redis Response Cache**: Optional Redis-backed semantic cache that persists across restarts and multi-instance deployments
+- **Redis Response Cache**: Optional Redis-backed per-user semantic cache that persists across restarts and multi-instance deployments
 - **Document Mode**: Answers drawn from uploaded materials with source citations
 - **Knowledge Mode**: Falls back to LLM general knowledge when documents don't cover the topic
 - **arXiv Fallback**: Research agent searches arXiv papers when no documents are uploaded or RAG retrieval fails
@@ -203,7 +203,7 @@ For detailed architecture, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | **Database** | MongoDB 7.0 | User data, conversations, documents |
 | **Cache/Queue** | Redis 7 + Celery 5.3 | Task queue and caching |
 | **Embeddings** | OpenAI text-embedding-3-small | Document vectorization (1536d) |
-| **LLM Provider** | Google Gemini 2.0 Flash | Primary language model |
+| **LLM Provider** | Google Gemini 2.5 Flash | Primary language model |
 
 ### Frontend Stack
 
@@ -458,12 +458,12 @@ class WorkflowState(TypedDict, total=False):
 7. **Storage** → Pinecone vector database with chunk metadata; propositions and KG triples in MongoDB
 
 **Retrieval** (12-step pipeline):
-1. **Cache Check** → Return cached answer if semantically similar query exists (cosine > 0.95)
+1. **Cache Check** → Return cached answer if semantically similar query exists for this user (cosine > 0.95)
 2. **Query Rewriting** → LLM resolves pronouns and expands abbreviations using conversation history
 3. **Query Decomposition** → Split complex multi-part questions into atomic sub-queries
 4. **Multi-Query Expansion** → Generate 3 alternative phrasings, retrieve for each, merge results
 5. **Adaptive Retrieval** → Query-type-aware BM25/vector weights (definition, comparison, code, procedural)
-6. **Hybrid Search** → BM25 (30%) + vector (70%) weighted score fusion
+6. **Hybrid Search** → BM25 (10%) + vector (90%) weighted score fusion
 7. **Cross-Encoder Reranking** → BAAI/bge-reranker-base re-scores top-20 → top-5
 8. **Self-RAG Verification** → LLM judges context sufficiency; reformulates + retries if insufficient
 9. **Context Expansion** → Sliding window (±1 neighbor chunks) or parent-child expansion
@@ -471,10 +471,10 @@ class WorkflowState(TypedDict, total=False):
 
 **Generation**:
 1. **Prompt Engineering** → Include expanded context + KG relationships + system instructions
-2. **LLM Inference** → Google Gemini 2.0 Flash (user-facing), OpenAI gpt-4o-mini (infrastructure)
+2. **LLM Inference** → Google Gemini 2.5 Flash (user-facing), OpenAI gpt-4o-mini (infrastructure)
 3. **Streaming** → Token-by-token response via WebSocket
 4. **Citation Extraction** → Parse and format source references
-5. **Cache Store** → Save answer for future similar queries
+5. **Cache Store** → Save answer in user's cache partition for future similar queries
 
 ### Database Schema
 
@@ -536,7 +536,7 @@ class WorkflowState(TypedDict, total=False):
 
 **Self-Correction & Caching**:
 - Self-RAG: LLM verifies if retrieved context is sufficient; reformulates query and retries (up to 2x) if not
-- Semantic response cache: cosine similarity lookup (threshold 0.95), TTL-based expiry, auto-invalidation on document changes
+- Semantic response cache: per-user cosine similarity lookup (threshold 0.95), TTL-based expiry, hit/miss stats, auto-invalidation on document changes
 - Retrieval feedback loop: thumbs up/down stored in MongoDB; identifies weak documents and tracks satisfaction rate
 
 **Proposition-Based Indexing**:

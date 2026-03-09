@@ -27,7 +27,7 @@ retrieval profile).
 | **Cross-encoder reranking**    | `BAAI/bge-reranker-base` reranks top candidates for precision                                        | `core/vectors/hybrid_search.py`  |
 | **Adaptive retrieval**         | Query-type classification (definition / comparison / code / procedural) adjusts search parameters    | `core/rag/adaptive_retrieval.py` |
 | **Adaptive chunking**          | PDF / code / markdown-aware chunk boundaries with sliding-window context expansion                   | `core/documents/chunker.py`      |
-| **Semantic response cache**    | Embedding-based cache (in-memory or Redis-backed) avoids redundant LLM calls for similar queries     | `core/rag/response_cache.py`     |
+| **Semantic response cache**    | Per-user embedding-based cache (in-memory or Redis-backed) avoids redundant LLM calls for similar queries | `core/rag/response_cache.py`     |
 | **Request budget**             | Per-query caps on LLM calls, retries, and wall-clock latency to prevent cost/latency explosions      | `core/rag/request_budget.py`     |
 | **Retrieval profiles**         | Named presets (`fast` / `balanced` / `deep`) so callers don't have to toggle 10 flags manually       | `core/rag/retrieval_profiles.py` |
 | **Deterministic fallback**     | Ordered degradation chain for every external dependency (LLM, reranker, Pinecone, Redis)             | `core/rag/fallback.py`           |

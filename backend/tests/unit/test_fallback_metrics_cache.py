@@ -301,17 +301,17 @@ class TestRedisResponseCacheFallback:
     def test_fallback_put_and_get(self):
         cache = RedisResponseCache(redis_url="redis://nonexistent:9999")
         emb = [0.1, 0.2, 0.3]
-        cache.put("what is PCA", emb, "PCA is...", [])
-        result = cache.get("what is PCA", emb)
+        cache.put("u1", "what is PCA", emb, "PCA is...", [])
+        result = cache.get("u1", "what is PCA", emb)
         assert result is not None
         assert result[0] == "PCA is..."
 
     def test_fallback_invalidate(self):
         cache = RedisResponseCache(redis_url="redis://nonexistent:9999")
         emb = [0.1, 0.2, 0.3]
-        cache.put("q", emb, "a", [])
+        cache.put("u1", "q", emb, "a", [])
         assert cache.size == 1
-        cache.invalidate()
+        cache.invalidate("u1")
         assert cache.size == 0
 
 
@@ -335,25 +335,29 @@ class TestRedisResponseCacheWithMockRedis:
 
     def test_put_calls_hset(self):
         cache, mock_redis = self._make_cache()
-        cache.put("q", [0.1, 0.2], "answer", [])
+        cache.put("u1", "q", [0.1, 0.2], "answer", [])
         assert mock_redis.hset.call_count == 2
 
     def test_get_returns_none_on_empty(self):
         cache, mock_redis = self._make_cache()
         mock_redis.hgetall.return_value = {}
-        result = cache.get("q", [0.1, 0.2])
+        result = cache.get("u1", "q", [0.1, 0.2])
         assert result is None
 
     def test_invalidate_calls_delete(self):
         cache, mock_redis = self._make_cache()
         mock_redis.hlen.return_value = 3
-        count = cache.invalidate()
+        count = cache.invalidate("u1")
         assert count == 3
         mock_redis.delete.assert_called_once()
 
-    def test_size_delegates_to_hlen(self):
+    def test_size_delegates_to_scan(self):
         cache, mock_redis = self._make_cache()
-        mock_redis.hlen.return_value = 42
+        mock_redis.scan_iter.return_value = iter([
+            "academe:cache:u1:entries",
+            "academe:cache:u2:entries",
+        ])
+        mock_redis.hlen.side_effect = [10, 32]
         assert cache.size == 42
 
 
@@ -367,28 +371,28 @@ class TestSemanticResponseCacheRegression:
     def test_put_and_get_exact_match(self):
         cache = SemanticResponseCache(similarity_threshold=0.99)
         emb = [1.0, 0.0, 0.0]
-        cache.put("q1", emb, "answer1", ["s1"])
-        result = cache.get("q1", emb)
+        cache.put("u1", "q1", emb, "answer1", ["s1"])
+        result = cache.get("u1", "q1", emb)
         assert result is not None
         assert result[0] == "answer1"
 
     def test_miss_below_threshold(self):
         cache = SemanticResponseCache(similarity_threshold=0.99)
-        cache.put("q1", [1.0, 0.0, 0.0], "answer1", [])
-        result = cache.get("q2", [0.0, 1.0, 0.0])
+        cache.put("u1", "q1", [1.0, 0.0, 0.0], "answer1", [])
+        result = cache.get("u1", "q2", [0.0, 1.0, 0.0])
         assert result is None
 
     def test_ttl_expiry(self):
         cache = SemanticResponseCache(similarity_threshold=0.5, ttl_seconds=1)
         emb = [1.0, 0.0]
-        cache.put("q", emb, "a", [])
+        cache.put("u1", "q", emb, "a", [])
         time.sleep(1.1)
-        result = cache.get("q", emb)
+        result = cache.get("u1", "q", emb)
         assert result is None
 
     def test_eviction_on_max_entries(self):
         cache = SemanticResponseCache(max_entries=2)
-        cache.put("q1", [1.0, 0.0], "a1", [])
-        cache.put("q2", [0.0, 1.0], "a2", [])
-        cache.put("q3", [0.5, 0.5], "a3", [])
+        cache.put("u1", "q1", [1.0, 0.0], "a1", [])
+        cache.put("u1", "q2", [0.0, 1.0], "a2", [])
+        cache.put("u1", "q3", [0.5, 0.5], "a3", [])
         assert cache.size == 2

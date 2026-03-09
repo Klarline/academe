@@ -248,13 +248,14 @@ Each decision documents: what, why, tradeoffs, and alternatives considered.
 
 ## 12. Semantic Response Cache
 
-**Decision**: Cache (query_embedding, answer, sources) in-memory. On new queries, compute cosine similarity against cached entries; if > 0.95, return cached answer.
+**Decision**: Cache (user_id, query_embedding, answer, sources) in-memory, **scoped per user**. On new queries, compute cosine similarity against that user's cached entries; if > 0.95, return cached answer.
 
 **Reasoning**:
 - Students frequently ask similar questions about the same material
 - LLM generation is the most expensive step (~500ms + API cost)
 - Semantic matching (not exact match) handles paraphrases: "What is PCA?" ≈ "Explain PCA"
-- `cache.invalidate()` is available and should be called when documents are uploaded/deleted to ensure freshness
+- Per-user scoping prevents cross-user data leakage (answers cite user-specific documents)
+- `cache.invalidate(user_id)` clears only the affected user when documents are uploaded/deleted
 
 **Trade-offs**:
 - (+) Dramatic latency reduction for repeat/similar queries (~50ms vs ~1s)
@@ -533,8 +534,8 @@ Plus one structural change:
 
 **Implementation**:
 - `RedisResponseCache` in `core/rag/response_cache.py`: same `get/put/invalidate/size` API as `SemanticResponseCache`
-- Uses Redis Hashes (`academe:cache:entries`, `academe:cache:embeddings`) for entry and embedding storage
-- Similarity search loads all embeddings on lookup (fine up to ~1000 entries; beyond that, use a vector-DB cache index)
+- Uses per-user Redis Hashes (`academe:cache:{user_id}:entries`, `academe:cache:{user_id}:embeddings`) for entry and embedding storage
+- Similarity search loads all embeddings for the requesting user on lookup (fine up to ~1000 entries per user; beyond that, use a vector-DB cache index)
 - If Redis is unreachable at init, transparently falls back to `SemanticResponseCache`
 - `REDIS_URL` setting added to `core/config/settings.py`
 
@@ -542,7 +543,7 @@ Plus one structural change:
 - (+) Cache survives restarts and is shared across workers/instances
 - (+) Graceful fallback — if Redis goes down, the system continues with in-memory cache
 - (+) Same API — callers don't know which backend they're using
-- (-) Similarity search is O(n) over all cached embeddings per lookup (acceptable for <1000 entries)
+- (-) Similarity search is O(n) over all cached embeddings per user per lookup (acceptable for <1000 entries per user)
 - (-) Serializing `DocumentSearchResult` objects for Redis requires conversion to dicts (handled in `put()`)
 
 **Alternatives considered**:

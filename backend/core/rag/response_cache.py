@@ -1,9 +1,8 @@
 """
 Semantic response cache for RAG answers.
 
-Caches (query, answer, sources) keyed by query embedding similarity.
-If a new query is semantically similar (cosine > threshold) to a cached
-entry, the cached answer is returned — saving LLM cost and latency.
+Caches (query, answer, sources) keyed by query embedding similarity,
+**scoped per user** to prevent cross-user data leakage.
 
 Supports in-memory and optional Redis backends.  ``RedisResponseCache``
 persists entries across restarts and supports multi-instance deployments.
@@ -39,12 +38,15 @@ class CacheEntry:
 
 class SemanticResponseCache:
     """
-    In-memory semantic cache with cosine-similarity lookup.
+    In-memory semantic cache with cosine-similarity lookup, scoped per user.
+
+    Each user's entries are stored in a separate partition to prevent
+    cross-user data leakage (answers cite user-specific documents).
 
     Parameters:
         similarity_threshold: Minimum cosine similarity for a cache hit (0-1).
         ttl_seconds: Time-to-live for cache entries. 0 = no expiry.
-        max_entries: Evict oldest entries when exceeded.
+        max_entries: Maximum entries per user. Evicts oldest when exceeded.
     """
 
     def __init__(
@@ -57,8 +59,13 @@ class SemanticResponseCache:
         self.ttl_seconds = ttl_seconds
         self.max_entries = max_entries
 
-        self._entries: Dict[str, CacheEntry] = {}
+        # Outer key: user_id, inner key: md5(query)
+        self._entries: Dict[str, Dict[str, CacheEntry]] = {}
         self._lock = threading.Lock()
+
+        # Hit/miss counters for monitoring
+        self._hits = 0
+        self._misses = 0
 
     # ------------------------------------------------------------------
     # Public API
@@ -66,13 +73,15 @@ class SemanticResponseCache:
 
     def get(
         self,
+        user_id: str,
         query: str,
         query_embedding: List[float],
     ) -> Optional[Tuple[str, List[Any]]]:
         """
-        Look up a cached answer by semantic similarity.
+        Look up a cached answer by semantic similarity within a user's partition.
 
         Args:
+            user_id: User whose cache to search.
             query: The user query (for logging).
             query_embedding: Embedding of the query.
 
@@ -84,8 +93,9 @@ class SemanticResponseCache:
         best_entry: Optional[CacheEntry] = None
 
         with self._lock:
+            user_entries = self._entries.get(user_id, {})
             expired_keys = []
-            for key, entry in self._entries.items():
+            for key, entry in user_entries.items():
                 if self.ttl_seconds and (now - entry.created_at) > self.ttl_seconds:
                     expired_keys.append(key)
                     continue
@@ -95,28 +105,32 @@ class SemanticResponseCache:
                     best_entry = entry
 
             for k in expired_keys:
-                del self._entries[k]
+                del user_entries[k]
 
         if best_entry and best_score >= self.similarity_threshold:
+            self._hits += 1
             logger.info(
-                f"Cache HIT (score={best_score:.3f}): "
-                f"'{query[:40]}' matched '{best_entry.query[:40]}'"
+                "Cache HIT (user=%s, score=%.3f): '%s' matched '%s'",
+                user_id[:8], best_score, query[:40], best_entry.query[:40],
             )
             return best_entry.answer, best_entry.sources
 
+        self._misses += 1
         return None
 
     def put(
         self,
+        user_id: str,
         query: str,
         query_embedding: List[float],
         answer: str,
         sources: List[Any],
     ) -> None:
         """
-        Store a query/answer pair in the cache.
+        Store a query/answer pair in the user's cache partition.
 
         Args:
+            user_id: User whose cache to store in.
             query: The user query.
             query_embedding: Embedding of the query.
             answer: Generated answer.
@@ -132,32 +146,61 @@ class SemanticResponseCache:
         )
 
         with self._lock:
-            self._entries[key] = entry
-            if len(self._entries) > self.max_entries:
-                self._evict_oldest()
+            if user_id not in self._entries:
+                self._entries[user_id] = {}
+            self._entries[user_id][key] = entry
+            if len(self._entries[user_id]) > self.max_entries:
+                self._evict_oldest(user_id)
 
-        logger.debug(f"Cache PUT: '{query[:40]}' (size={len(self._entries)})")
+        logger.debug(
+            "Cache PUT (user=%s): '%s' (size=%d)",
+            user_id[:8], query[:40], len(self._entries[user_id]),
+        )
 
     def invalidate(self, user_id: Optional[str] = None) -> int:
         """
         Clear cache entries. Called when documents change.
 
         Args:
-            user_id: If provided, only clear for this user (not yet
-                     implemented — clears all for now).
+            user_id: If provided, clear only this user's entries.
+                     If None, clear all entries for all users.
 
         Returns:
             Number of entries removed.
         """
         with self._lock:
-            count = len(self._entries)
-            self._entries.clear()
-        logger.info(f"Cache invalidated: {count} entries cleared")
+            if user_id is not None:
+                user_entries = self._entries.pop(user_id, {})
+                count = len(user_entries)
+            else:
+                count = sum(len(v) for v in self._entries.values())
+                self._entries.clear()
+        logger.info(
+            "Cache invalidated (user=%s): %d entries cleared",
+            user_id or "ALL", count,
+        )
         return count
 
     @property
     def size(self) -> int:
-        return len(self._entries)
+        """Total entries across all users."""
+        return sum(len(v) for v in self._entries.values())
+
+    def user_size(self, user_id: str) -> int:
+        """Number of entries for a specific user."""
+        return len(self._entries.get(user_id, {}))
+
+    def stats(self) -> Dict[str, Any]:
+        """Return cache statistics including hit rate."""
+        total = self._hits + self._misses
+        return {
+            "hits": self._hits,
+            "misses": self._misses,
+            "total_lookups": total,
+            "hit_rate": self._hits / total if total > 0 else 0.0,
+            "entries": self.size,
+            "users": len(self._entries),
+        }
 
     # ------------------------------------------------------------------
     # Internals
@@ -174,12 +217,13 @@ class SemanticResponseCache:
             return 0.0
         return dot / (norm_a * norm_b)
 
-    def _evict_oldest(self) -> None:
-        """Remove the oldest entry (by created_at)."""
-        if not self._entries:
+    def _evict_oldest(self, user_id: str) -> None:
+        """Remove the oldest entry (by created_at) for a given user."""
+        user_entries = self._entries.get(user_id, {})
+        if not user_entries:
             return
-        oldest_key = min(self._entries, key=lambda k: self._entries[k].created_at)
-        del self._entries[oldest_key]
+        oldest_key = min(user_entries, key=lambda k: user_entries[k].created_at)
+        del user_entries[oldest_key]
 
 
 # ---------------------------------------------------------------------------
@@ -188,22 +232,22 @@ class SemanticResponseCache:
 
 class RedisResponseCache:
     """
-    Redis-backed semantic response cache.
+    Redis-backed semantic response cache, scoped per user.
 
     Persists across restarts and works with multiple backend instances.
     Falls back to in-memory ``SemanticResponseCache`` if Redis is unavailable.
 
-    Redis key scheme:
-        ``academe:cache:entries``  — Redis Hash mapping md5(query) → JSON blob
-        ``academe:cache:embeddings`` — Redis Hash mapping md5(query) → JSON list
+    Redis key scheme (per-user):
+        ``academe:cache:{user_id}:entries``     — Hash: md5(query) → JSON blob
+        ``academe:cache:{user_id}:embeddings``  — Hash: md5(query) → JSON list
 
     Similarity search still runs in-process (loads all embeddings on lookup).
-    This is fine up to ~1000 entries; beyond that, consider a vector-DB
-    cache index.
+    This is fine up to ~1000 entries per user; beyond that, consider a
+    vector-DB cache index.
     """
 
-    ENTRIES_KEY = "academe:cache:entries"
-    EMBEDDINGS_KEY = "academe:cache:embeddings"
+    ENTRIES_KEY_TPL = "academe:cache:{user_id}:entries"
+    EMBEDDINGS_KEY_TPL = "academe:cache:{user_id}:embeddings"
 
     def __init__(
         self,
@@ -242,18 +286,26 @@ class RedisResponseCache:
         except Exception:
             return "redis://localhost:6379/0"
 
+    def _entries_key(self, user_id: str) -> str:
+        return self.ENTRIES_KEY_TPL.format(user_id=user_id)
+
+    def _embeddings_key(self, user_id: str) -> str:
+        return self.EMBEDDINGS_KEY_TPL.format(user_id=user_id)
+
     # ── Public API (mirrors SemanticResponseCache) ────────────────────
 
     def get(
         self,
+        user_id: str,
         query: str,
         query_embedding: List[float],
     ) -> Optional[Tuple[str, List[Any]]]:
         if self._fallback:
-            return self._fallback.get(query, query_embedding)
+            return self._fallback.get(user_id, query, query_embedding)
 
         try:
-            all_embeddings = self._redis.hgetall(self.EMBEDDINGS_KEY)
+            emb_key = self._embeddings_key(user_id)
+            all_embeddings = self._redis.hgetall(emb_key)
             if not all_embeddings:
                 return None
 
@@ -271,16 +323,17 @@ class RedisResponseCache:
                     best_key = key
 
             if best_key and best_score >= self.similarity_threshold:
-                entry_json = self._redis.hget(self.ENTRIES_KEY, best_key)
+                ent_key = self._entries_key(user_id)
+                entry_json = self._redis.hget(ent_key, best_key)
                 if entry_json:
                     entry = json.loads(entry_json)
                     if self.ttl_seconds and (now - entry["created_at"]) > self.ttl_seconds:
-                        self._redis.hdel(self.ENTRIES_KEY, best_key)
-                        self._redis.hdel(self.EMBEDDINGS_KEY, best_key)
+                        self._redis.hdel(ent_key, best_key)
+                        self._redis.hdel(emb_key, best_key)
                         return None
                     logger.info(
-                        "Redis cache HIT (score=%.3f): '%s'",
-                        best_score, query[:40],
+                        "Redis cache HIT (user=%s, score=%.3f): '%s'",
+                        user_id[:8], best_score, query[:40],
                     )
                     return entry["answer"], entry["sources"]
 
@@ -291,13 +344,14 @@ class RedisResponseCache:
 
     def put(
         self,
+        user_id: str,
         query: str,
         query_embedding: List[float],
         answer: str,
         sources: List[Any],
     ) -> None:
         if self._fallback:
-            self._fallback.put(query, query_embedding, answer, sources)
+            self._fallback.put(user_id, query, query_embedding, answer, sources)
             return
 
         key = hashlib.md5(query.encode()).hexdigest()
@@ -323,13 +377,15 @@ class RedisResponseCache:
         }
 
         try:
-            self._redis.hset(self.ENTRIES_KEY, key, json.dumps(entry))
-            self._redis.hset(self.EMBEDDINGS_KEY, key, json.dumps(query_embedding))
+            ent_key = self._entries_key(user_id)
+            emb_key = self._embeddings_key(user_id)
+            self._redis.hset(ent_key, key, json.dumps(entry))
+            self._redis.hset(emb_key, key, json.dumps(query_embedding))
 
-            if self._redis.hlen(self.ENTRIES_KEY) > self.max_entries:
-                self._evict_oldest_redis()
+            if self._redis.hlen(ent_key) > self.max_entries:
+                self._evict_oldest_redis(user_id)
 
-            logger.debug("Redis cache PUT: '%s'", query[:40])
+            logger.debug("Redis cache PUT (user=%s): '%s'", user_id[:8], query[:40])
         except Exception as e:
             logger.warning("Redis cache put failed: %s", e)
 
@@ -337,9 +393,22 @@ class RedisResponseCache:
         if self._fallback:
             return self._fallback.invalidate(user_id)
         try:
-            count = self._redis.hlen(self.ENTRIES_KEY)
-            self._redis.delete(self.ENTRIES_KEY, self.EMBEDDINGS_KEY)
-            logger.info("Redis cache invalidated: %d entries cleared", count)
+            if user_id is not None:
+                ent_key = self._entries_key(user_id)
+                emb_key = self._embeddings_key(user_id)
+                count = self._redis.hlen(ent_key)
+                self._redis.delete(ent_key, emb_key)
+            else:
+                # Scan for all user cache keys and delete them
+                count = 0
+                for key in self._redis.scan_iter("academe:cache:*:entries"):
+                    count += self._redis.hlen(key)
+                    emb_sibling = key.replace(":entries", ":embeddings")
+                    self._redis.delete(key, emb_sibling)
+            logger.info(
+                "Redis cache invalidated (user=%s): %d entries cleared",
+                user_id or "ALL", count,
+            )
             return count
         except Exception as e:
             logger.warning("Redis cache invalidate failed: %s", e)
@@ -347,24 +416,39 @@ class RedisResponseCache:
 
     @property
     def size(self) -> int:
+        """Total entries across all users."""
         if self._fallback:
             return self._fallback.size
         try:
-            return self._redis.hlen(self.ENTRIES_KEY)
+            total = 0
+            for key in self._redis.scan_iter("academe:cache:*:entries"):
+                total += self._redis.hlen(key)
+            return total
         except Exception:
             return 0
 
-    def _evict_oldest_redis(self) -> None:
-        """Remove the oldest entry by created_at."""
+    def user_size(self, user_id: str) -> int:
+        """Number of entries for a specific user."""
+        if self._fallback:
+            return self._fallback.user_size(user_id)
         try:
-            all_entries = self._redis.hgetall(self.ENTRIES_KEY)
+            return self._redis.hlen(self._entries_key(user_id))
+        except Exception:
+            return 0
+
+    def _evict_oldest_redis(self, user_id: str) -> None:
+        """Remove the oldest entry by created_at for a given user."""
+        try:
+            ent_key = self._entries_key(user_id)
+            emb_key = self._embeddings_key(user_id)
+            all_entries = self._redis.hgetall(ent_key)
             if not all_entries:
                 return
             oldest_key = min(
                 all_entries,
                 key=lambda k: json.loads(all_entries[k]).get("created_at", 0),
             )
-            self._redis.hdel(self.ENTRIES_KEY, oldest_key)
-            self._redis.hdel(self.EMBEDDINGS_KEY, oldest_key)
+            self._redis.hdel(ent_key, oldest_key)
+            self._redis.hdel(emb_key, oldest_key)
         except Exception as e:
             logger.warning("Redis eviction failed: %s", e)

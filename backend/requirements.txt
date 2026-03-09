@@ -16,6 +16,7 @@ python-dotenv==1.0.0
 pydantic==2.10.4
 pydantic-settings==2.7.0
 sentence-transformers>=2.2.2  # Real semantic embeddings
+pinecone-client==3.0.0  # Vector database (pinned — newer versions renamed to 'pinecone')
 
 # Database
 pymongo==4.6.1

@@ -245,7 +245,7 @@ class RAGPipeline:
                 embedding_service = self._get_embedding_service()
                 if embedding_service:
                     q_embedding = embedding_service.generate_embedding(query)
-                    cached = self.response_cache.get(query, q_embedding)
+                    cached = self.response_cache.get(user.id, query, q_embedding)
                     if cached:
                         return cached  # (answer, sources)
             except Exception as e:
@@ -288,7 +288,7 @@ class RAGPipeline:
                     if embedding_service:
                         q_embedding = embedding_service.generate_embedding(query)
                 if q_embedding is not None:
-                    self.response_cache.put(query, q_embedding, answer, search_results)
+                    self.response_cache.put(user.id, query, q_embedding, answer, search_results)
             except Exception as e:
                 logger.debug(f"Cache put failed: {e}")
 
