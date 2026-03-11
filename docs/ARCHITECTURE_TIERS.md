@@ -31,7 +31,7 @@ retrieval profile).
 | **Request budget**             | Per-query caps on LLM calls, retries, and wall-clock latency to prevent cost/latency explosions      | `core/rag/request_budget.py`     |
 | **Retrieval profiles**         | Named presets (`fast` / `balanced` / `deep`) so callers don't have to toggle 10 flags manually       | `core/rag/retrieval_profiles.py` |
 | **Deterministic fallback**     | Ordered degradation chain for every external dependency (LLM, reranker, Pinecone, Redis)             | `core/rag/fallback.py`           |
-| **Per-stage value metrics**    | Tracks whether each pipeline stage changed the input/output, feeds aggregate counters                | `core/rag/stage_metrics.py`      |
+| **Per-stage value metrics**    | Tracks whether each pipeline stage changed the input/output; wired into `RAGPipeline.query_with_context()` and absorbed into process-global `AggregateMetrics` after each request | `core/rag/stage_metrics.py`, `core/rag/pipeline.py` |
 | **Memory & progress tracking** | Spaced-repetition scheduler, concept mastery, weak-area identification                               | `core/memory/`                   |
 | **Auth & multi-tenancy**       | JWT auth, per-user document isolation, profile management                                            | `core/auth/`, `core/database/`   |
 

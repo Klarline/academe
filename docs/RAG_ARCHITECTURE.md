@@ -111,6 +111,7 @@ Six layers of retrieval for best precision:
 11. **Knowledge graph augmentation** — Multi-hop traversal from query entities through extracted triples adds related facts
 12. **LLM generation** — Answer grounded in expanded context + KG relationships
 13. **Cache result** — Store answer in user's cache partition for future similar queries (reuses query embedding from step 1 to avoid double embedding)
+14. **Stage metrics** — `RequestMetrics` records per-stage timing, changed_input/output, and detail for each step; summary logged and absorbed into `AggregateMetrics` for cross-request analysis
 
 ### 3.1 HyDE (Hypothetical Document Embeddings)
 
@@ -206,7 +207,7 @@ feedback appended to the question, causing a fresh RAG retrieval cycle.
 ```
 backend/core/
 ├── rag/
-│   ├── pipeline.py              # RAGPipeline: cache → decompose → multi-query → adaptive → self-rag → generate
+│   ├── pipeline.py              # RAGPipeline: cache → decompose → multi-query → adaptive → self-rag → generate; instruments every stage via RequestMetrics
 │   ├── adaptive_retrieval.py    # AdaptiveRetriever: query-type routing (wired into pipeline)
 │   ├── query_rewriter.py        # QueryRewriter (LLM) + HyDE + multi-query generation
 │   ├── response_cache.py        # SemanticResponseCache + RedisResponseCache: per-user cosine similarity lookup, TTL, eviction, hit/miss stats

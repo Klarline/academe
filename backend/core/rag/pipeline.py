@@ -2,6 +2,7 @@
 
 import logging
 import re
+import time
 from typing import List, Dict, Optional, Any, Tuple
 
 from core.vectors import SemanticSearchService, HybridSearchService
@@ -21,6 +22,7 @@ from core.rag.proposition_indexer import (
 from core.rag.knowledge_graph import (
     KGExtractor, KnowledgeGraphRepository, KnowledgeGraphTraverser,
 )
+from core.rag.stage_metrics import RequestMetrics, get_aggregate_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -238,8 +240,13 @@ class RAGPipeline:
         Returns:
             Tuple of (answer, source_chunks)
         """
+        # Initialize per-request stage metrics
+        metrics = RequestMetrics()
+        self._request_metrics = metrics
+
         # Step 0: Check response cache (compute q_embedding once; reuse for put)
         q_embedding = None
+        cache_start = time.time()
         if self.response_cache:
             try:
                 embedding_service = self._get_embedding_service()
@@ -247,14 +254,25 @@ class RAGPipeline:
                     q_embedding = embedding_service.generate_embedding(query)
                     cached = self.response_cache.get(user.id, query, q_embedding)
                     if cached:
+                        metrics.record_cache(hit=True, elapsed_ms=(time.time() - cache_start) * 1000)
+                        metrics.log_summary()
+                        get_aggregate_metrics().absorb(metrics)
                         return cached  # (answer, sources)
             except Exception as e:
                 logger.debug(f"Cache lookup failed: {e}")
+        metrics.record_cache(hit=False, elapsed_ms=(time.time() - cache_start) * 1000)
 
         # Step 1: Query rewriting (resolve pronouns, expand terms)
         search_query = query
+        rewrite_start = time.time()
         if self.query_rewriter and conversation_history:
             search_query = self.query_rewriter.rewrite(query, conversation_history)
+        metrics.record_query_rewrite(
+            enabled=bool(self.query_rewriter),
+            original=query,
+            rewritten=search_query,
+            elapsed_ms=(time.time() - rewrite_start) * 1000,
+        )
 
         # Step 2: Retrieve (with decomposition, multi-query, adaptive, self-rag)
         search_results = self._full_search(
@@ -273,9 +291,15 @@ class RAGPipeline:
         context = self._build_context(search_results)
 
         # Augment with knowledge graph context for multi-hop reasoning
+        kg_start = time.time()
         kg_context = self._get_kg_context(query, search_results)
         if kg_context:
             context = context + "\n\n" + kg_context
+        metrics.record_knowledge_graph(
+            enabled=bool(self.kg_repo),
+            triples_added=len(kg_context.strip().split("\n")) if kg_context else 0,
+            elapsed_ms=(time.time() - kg_start) * 1000,
+        )
 
         # Generate answer with original query (not rewritten) for natural response
         answer = self._generate_answer(query, context, user)
@@ -291,6 +315,10 @@ class RAGPipeline:
                     self.response_cache.put(user.id, query, q_embedding, answer, search_results)
             except Exception as e:
                 logger.debug(f"Cache put failed: {e}")
+
+        # Log per-request stage metrics and fold into aggregate counters
+        metrics.log_summary()
+        get_aggregate_metrics().absorb(metrics)
 
         return answer, search_results
 
@@ -380,29 +408,70 @@ class RAGPipeline:
             use_hyde=use_hyde,
             **search_kwargs,
         )
+        metrics = getattr(self, '_request_metrics', None)
 
         # Layer 1: Query decomposition
         if self.decomposer:
+            decomp_start = time.time()
             try:
-                results = retrieve_with_decomposition(
-                    query=query,
-                    search_fn=lambda **kw: self._adaptive_or_base_search(**kw),
-                    decomposer=self.decomposer,
-                    **base_kwargs,
-                )
-                if results:
-                    return self._maybe_verify(query, results, base_kwargs)
+                sub_queries = self.decomposer.decompose(query)
+                num_subs = len(sub_queries)
+                if metrics:
+                    metrics.record_decomposition(
+                        enabled=True, num_sub_queries=num_subs,
+                        elapsed_ms=(time.time() - decomp_start) * 1000,
+                    )
+                if num_subs > 1:
+                    # Retrieve per sub-query, merge, deduplicate
+                    all_results: Dict[str, DocumentSearchResult] = {}
+                    per_query_k = max(3, top_k // num_subs + 1)
+                    for sq in sub_queries:
+                        sq_results = self._adaptive_or_base_search(
+                            query=sq, **{**base_kwargs, "top_k": per_query_k},
+                        )
+                        for r in sq_results:
+                            key = f"{r.chunk.document_id}_{r.chunk.chunk_index}"
+                            if key not in all_results or r.score > all_results[key].score:
+                                all_results[key] = r
+                    results = sorted(
+                        all_results.values(), key=lambda r: r.score, reverse=True
+                    )
+                    for i, r in enumerate(results):
+                        r.rank = i + 1
+                    results = results[:top_k]
+                    if results:
+                        return self._maybe_verify(query, results, base_kwargs)
             except Exception as e:
+                if metrics:
+                    metrics.record_decomposition(
+                        enabled=True, num_sub_queries=0,
+                        elapsed_ms=(time.time() - decomp_start) * 1000,
+                    )
                 logger.warning(f"Decomposition failed, falling back: {e}")
+        elif metrics:
+            metrics.record_decomposition(enabled=False)
 
         # Layer 2: Multi-query expansion
         if self.use_multi_query and self.query_rewriter:
+            mq_start = time.time()
             try:
                 results = self._search_multi_query(query=query, **base_kwargs)
+                if metrics:
+                    metrics.record_multi_query(
+                        enabled=True, num_variants=3,
+                        elapsed_ms=(time.time() - mq_start) * 1000,
+                    )
                 if results:
                     return self._maybe_verify(query, results, base_kwargs)
             except Exception as e:
+                if metrics:
+                    metrics.record_multi_query(
+                        enabled=True, num_variants=0,
+                        elapsed_ms=(time.time() - mq_start) * 1000,
+                    )
                 logger.warning(f"Multi-query failed, falling back: {e}")
+        elif metrics:
+            metrics.record_multi_query(enabled=False)
 
         # Layer 3: Standard adaptive/base search
         results = self._adaptive_or_base_search(query=query, **base_kwargs)
@@ -495,16 +564,40 @@ class RAGPipeline:
         search_kwargs: Dict[str, Any],
     ) -> List[DocumentSearchResult]:
         """Apply Self-RAG verification if enabled."""
+        metrics = getattr(self, '_request_metrics', None)
         if not self.self_rag or not results:
+            if metrics:
+                metrics.record_self_rag(enabled=bool(self.self_rag))
             return results
 
+        verify_start = time.time()
+        original_ids = [
+            f"{r.chunk.document_id}_{r.chunk.chunk_index}" for r in results[:5]
+        ]
         try:
-            return self.self_rag.search_with_verification(
+            verified = self.self_rag.search_with_verification(
                 query=query,
                 search_fn=lambda **kw: self._adaptive_or_base_search(**kw),
                 **search_kwargs,
             )
+            verified_ids = [
+                f"{r.chunk.document_id}_{r.chunk.chunk_index}" for r in verified[:5]
+            ]
+            reformulated = original_ids != verified_ids
+            if metrics:
+                metrics.record_self_rag(
+                    enabled=True,
+                    retries=1 if reformulated else 0,
+                    reformulated=reformulated,
+                    elapsed_ms=(time.time() - verify_start) * 1000,
+                )
+            return verified
         except Exception as e:
+            if metrics:
+                metrics.record_self_rag(
+                    enabled=True, retries=0,
+                    elapsed_ms=(time.time() - verify_start) * 1000,
+                )
             logger.warning(f"Self-RAG verification failed: {e}")
             return results
 

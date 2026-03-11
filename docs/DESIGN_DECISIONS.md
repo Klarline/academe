@@ -508,6 +508,7 @@ Plus one structural change:
 - Each event tracks: stage name, enabled, ran, changed_input, changed_output, elapsed_ms
 - `to_dict()` produces a summary including `stages_that_changed_input` and `stages_that_changed_output` lists
 - `AggregateMetrics.absorb()` folds request metrics into running counters (ready for Prometheus export)
+- **Wired into `RAGPipeline.query_with_context()`**: A `RequestMetrics` instance is created per request, records cache hit/miss, query rewriting, decomposition, multi-query, self-RAG, and knowledge graph stages with timing, then logs a summary and absorbs into the global `AggregateMetrics` singleton
 
 **Trade-offs**:
 - (+) Zero external dependencies — pure Python counters and dataclasses
