@@ -670,3 +670,88 @@ Plus one structural change:
 - *bge-reranker-large*: Higher quality but significantly slower
 - *Cohere Rerank API*: Strong quality but adds external dependency and cost
 - *No reranker*: Simpler but measurably worse precision
+
+
+---
+
+## 27. Celery Task Monitoring (Prometheus + MongoDB)
+
+**Decision**: Add signal-based Celery monitoring that writes to both Prometheus counters (Level 2) and a MongoDB `task_failures` collection (Level 3). Signal handlers are connected once at worker startup — no changes to individual task functions.
+
+**Reasoning**:
+- Celery tasks (document indexing, memory updates, progress tracking) can fail silently after exhausting retries
+- Without monitoring, the only signal is the user seeing "indexing failed" in the UI — no aggregation, no alerting
+- Prometheus counters (`academe_celery_task_success_total`, `_failure_total`, `_retry_total`) enable Grafana dashboards and alerts (e.g. "failure rate > 5%")
+- MongoDB records provide structured failure data for offline analysis: which tasks fail, how often, what exceptions, how many retries
+
+**Implementation**:
+- `core/celery_monitoring.py`: Prometheus counters with `try/except ImportError` fallback, signal handlers for `task_success`, `task_failure`, `task_retry`, MongoDB failure logger, `get_celery_metrics()` reader
+- `core/celery_config.py`: calls `connect_signals()` after task autodiscovery
+- `core/rag/analytics.py`: `task_failure_summary()` aggregates from MongoDB; `celery_task_metrics()` reads Prometheus counters; both wired into `generate_report()` with auto-recommendations
+
+**Trade-offs**:
+- (+) Zero changes to existing task functions — pure signal-based
+- (+) Prometheus counters auto-exposed at `/metrics` via existing Instrumentator
+- (+) MongoDB failures survive restarts and are queryable via analytics endpoint
+- (+) Graceful no-op if `prometheus_client` is not installed
+- (-) MongoDB write on every failure adds ~5ms latency to the failure path (acceptable)
+- (-) In-process Prometheus counters reset on worker restart (Prometheus scraping provides persistence)
+
+**Alternatives considered**:
+- *Flower only*: Quick dashboard but no Grafana integration or structured failure storage
+- *Sentry*: Full error tracking but adds external SaaS dependency
+- *Log parsing*: Cheap but fragile and hard to aggregate
+
+
+---
+
+## 28. Terminal Failure Handling for Celery Tasks
+
+**Decision**: Catch `MaxRetriesExceededError` in every Celery task. For document-related tasks, set `processing_status = FAILED` with the error message so the UI shows the correct state.
+
+**Reasoning**:
+- Previously, `index_document_task` wrote `processing_error` but never set `processing_status = FAILED` — documents were stuck in `PROCESSING` state after all retries
+- `process_document_task` had no status update at all on failure
+- `update_memory_task` and `update_progress_task` silently raised after retries, with no structured return value
+- `delete_document_task` left orphaned data (Pinecone vectors, chunks, KG triples) with no log trail
+
+**Implementation**:
+- All 5 tasks now catch `MaxRetriesExceededError` explicitly after `self.retry()`
+- `index_document_task` and `process_document_task`: set `processing_status = FAILED` and write a descriptive `processing_error` including retry count
+- `update_memory_task` and `update_progress_task`: return `{"status": "permanently_failed"}` for structured logging
+- `delete_document_task`: logs orphaned resources for manual cleanup
+- All re-raise after handling so Celery still marks the task as failed (signals fire correctly)
+
+**Trade-offs**:
+- (+) Documents no longer stuck in limbo — users see "failed" instead of endless "processing"
+- (+) Every permanent failure is explicitly logged with context
+- (+) Celery signal handlers still fire (monitoring picks up the failure)
+- (-) Minor code duplication across tasks (could use a base class, but explicit handling is clearer)
+
+---
+
+## 29. Queue Depth Protection
+
+**Decision**: Add `check_queue_before_dispatch()` that reads the Redis list length and raises `QueueFullError` if it exceeds `MAX_QUEUE_DEPTH` (default 500, configurable via `CELERY_MAX_QUEUE_DEPTH` env var).
+
+**Reasoning**:
+- Celery queues are Redis lists with no built-in size limit
+- Under load (e.g. 100 users uploading simultaneously), tasks pile up with no backpressure
+- Eventually this exhausts Redis memory, causing cascading failures for all services sharing Redis (cache, sessions, Celery)
+
+**Implementation**:
+- `celery_monitoring.py`: `get_queue_depth()` reads `LLEN` on the Redis queue list; `check_queue_before_dispatch()` raises if over limit
+- Fail-open: if Redis is unreachable, the check returns 0 and allows the dispatch (better to attempt than to block)
+- `document_service.py`: calls `check_queue_before_dispatch("documents")` before `delete_document_task.delay()`; catches `QueueFullError` gracefully (delete still succeeds from the user's perspective, cleanup is deferred)
+
+**Trade-offs**:
+- (+) Prevents Redis memory exhaustion from unbounded queue growth
+- (+) Configurable limit per deployment (`CELERY_MAX_QUEUE_DEPTH`)
+- (+) Fail-open design: Redis downtime doesn't block task dispatch
+- (-) Per-queue check, not per-user — a single busy queue affects all users
+- (-) `LLEN` is O(1) but adds one Redis round-trip per dispatch
+
+**Alternatives considered**:
+- *Redis memory limit*: Blunt instrument that kills all Redis data, not just queues
+- *Celery rate limiting per task*: Controls throughput, not queue depth
+- *Worker auto-scaling*: Solves the consumer side but doesn't protect Redis memory

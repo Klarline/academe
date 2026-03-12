@@ -124,12 +124,16 @@ class DocumentService:
 
         # Enqueue background cleanup (non-blocking)
         try:
+            from core.celery_monitoring import check_queue_before_dispatch, QueueFullError
             from core.tasks import delete_document_task
+            check_queue_before_dispatch("documents")
             delete_document_task.delay(
                 document_id=document_id,
                 user_id=user_id,
                 file_path=file_path or "",
             )
+        except QueueFullError as e:
+            logger.warning(f"Queue full, cleanup deferred: {e}")
         except Exception as e:
             logger.warning(f"Failed to enqueue delete task (cleanup may be incomplete): {e}")
 

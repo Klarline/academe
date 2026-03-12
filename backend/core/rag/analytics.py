@@ -251,6 +251,62 @@ class RAGAnalytics:
         from core.rag.response_cache import get_cache_metrics
         return get_cache_metrics()
 
+    def celery_task_metrics(self) -> Dict[str, Any]:
+        """
+        Return process-global Celery task success/failure/retry counters.
+
+        Reads from Prometheus counters via celery_monitoring module.
+        """
+        from core.celery_monitoring import get_celery_metrics
+        return get_celery_metrics()
+
+    def task_failure_summary(
+        self,
+        days: int = 30,
+    ) -> pd.DataFrame:
+        """
+        Aggregate task failures from MongoDB by task name.
+
+        Returns DataFrame with task_name, failure_count, last_exception,
+        and most recent failure timestamp.
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+
+        pipeline = [
+            {"$match": {"created_at": {"$gte": cutoff}}},
+            {
+                "$group": {
+                    "_id": "$task_name",
+                    "failure_count": {"$sum": 1},
+                    "last_exception": {"$last": "$exception_message"},
+                    "last_failure": {"$max": "$created_at"},
+                    "avg_retries": {"$avg": "$retries"},
+                }
+            },
+            {"$sort": {"failure_count": -1}},
+            {"$limit": 20},
+        ]
+
+        try:
+            collection = self.db.get_database()["task_failures"]
+            rows = list(collection.aggregate(pipeline))
+        except Exception as e:
+            logger.error(f"Task failure aggregation failed: {e}")
+            return pd.DataFrame(columns=["task_name", "failure_count", "last_exception", "avg_retries"])
+
+        if not rows:
+            return pd.DataFrame(columns=["task_name", "failure_count", "last_exception", "avg_retries"])
+
+        return pd.DataFrame([
+            {
+                "task_name": r["_id"] or "unknown",
+                "failure_count": r["failure_count"],
+                "last_exception": (r.get("last_exception") or "")[:200],
+                "avg_retries": round(r.get("avg_retries", 0), 1),
+            }
+            for r in rows
+        ])
+
     def generate_report(
         self,
         days: int = 30,
@@ -264,6 +320,8 @@ class RAGAnalytics:
         query_type_df = self.query_type_performance(user_id=user_id, days=days)
         stage_df = self.stage_value_summary()
         cache_stats = self.cache_performance()
+        celery_stats = self.celery_task_metrics()
+        task_failures_df = self.task_failure_summary(days=days)
 
         # Trend detection: declining if rolling rate drops > 5% over last 7 days
         declining = False
@@ -293,6 +351,22 @@ class RAGAnalytics:
                 f"{cache_stats['total_lookups']} lookups); users may be asking "
                 f"diverse questions or cache TTL may be too short."
             )
+        if not task_failures_df.empty:
+            top_fail = task_failures_df.iloc[0]
+            recommendations.append(
+                f"Celery task '{top_fail['task_name']}' has failed "
+                f"{int(top_fail['failure_count'])} times in the last {days} days; "
+                f"last error: {top_fail['last_exception'][:100]}"
+            )
+        if celery_stats["total_failure"] > 0 and celery_stats["total_success"] > 0:
+            fail_rate = celery_stats["total_failure"] / (
+                celery_stats["total_success"] + celery_stats["total_failure"]
+            )
+            if fail_rate > 0.05:
+                recommendations.append(
+                    f"Celery task failure rate is {fail_rate:.1%}; "
+                    f"investigate worker health and external dependencies."
+                )
 
         return {
             "period_days": days,
@@ -302,6 +376,8 @@ class RAGAnalytics:
             "query_type_performance": query_type_df.to_dict(orient="records") if not query_type_df.empty else [],
             "stage_value_summary": stage_df.to_dict(orient="records") if not stage_df.empty else [],
             "cache_performance": cache_stats,
+            "celery_task_metrics": celery_stats,
+            "task_failures": task_failures_df.to_dict(orient="records") if not task_failures_df.empty else [],
             "satisfaction_declining": declining,
             "recommendations": recommendations,
         }

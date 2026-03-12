@@ -62,6 +62,10 @@ celery_app.conf.update(
 # Task autodiscovery
 celery_app.autodiscover_tasks(['core'])
 
+# Connect Prometheus + MongoDB monitoring signals
+from core.celery_monitoring import connect_signals
+connect_signals()
+
 
 # Initialize database when worker starts
 @worker_ready.connect

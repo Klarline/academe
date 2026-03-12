@@ -11,6 +11,8 @@ import logging
 from typing import Dict, Any
 from datetime import datetime
 
+from celery.exceptions import MaxRetriesExceededError
+
 from core.celery_config import celery_app
 from core.utils.datetime_utils import get_current_time
 
@@ -76,7 +78,18 @@ def update_memory_task(
         logger.error(f"Error updating memory: {exc}")
         
         # Retry with exponential backoff
-        raise self.retry(exc=exc, countdown=2 ** self.request.retries)
+        try:
+            raise self.retry(exc=exc, countdown=2 ** self.request.retries)
+        except MaxRetriesExceededError:
+            logger.error(
+                f"Memory update permanently failed for user {user_id} "
+                f"after {self.max_retries} retries: {exc}"
+            )
+            return {
+                "status": "permanently_failed",
+                "user_id": user_id,
+                "error": str(exc),
+            }
 
 
 @celery_app.task(
@@ -150,7 +163,19 @@ def update_progress_task(
         
     except Exception as exc:
         logger.error(f"Error updating progress: {exc}")
-        raise self.retry(exc=exc, countdown=2 ** self.request.retries)
+        try:
+            raise self.retry(exc=exc, countdown=2 ** self.request.retries)
+        except MaxRetriesExceededError:
+            logger.error(
+                f"Progress update permanently failed for user {user_id}, "
+                f"concept {concept}: {exc}"
+            )
+            return {
+                "status": "permanently_failed",
+                "user_id": user_id,
+                "concept": concept,
+                "error": str(exc),
+            }
 
 
 @celery_app.task(
@@ -204,7 +229,23 @@ def process_document_task(
         
     except Exception as exc:
         logger.error(f"Error processing document: {exc}")
-        raise self.retry(exc=exc, countdown=10)
+        try:
+            raise self.retry(exc=exc, countdown=10)
+        except MaxRetriesExceededError:
+            logger.error(
+                f"Document processing permanently failed for {document_id}: {exc}"
+            )
+            try:
+                from core.documents import DocumentRepository
+                from core.models.document import DocumentStatus
+                doc_repo = DocumentRepository()
+                doc_repo.update_document(document_id, {
+                    "processing_status": DocumentStatus.FAILED.value,
+                    "processing_error": f"Processing failed after {self.max_retries} retries: {str(exc)[:500]}",
+                })
+            except Exception:
+                pass
+            raise
 
 
 @celery_app.task(
@@ -272,19 +313,35 @@ def index_document_task(
     except Exception as exc:
         logger.error(f"Error indexing document: {exc}")
         
-        # Update document status to failed
+        # Update document with error info on every attempt
         try:
             from core.database import init_database
             from core.documents import DocumentRepository
             init_database()
             doc_repo = DocumentRepository()
             doc_repo.update_document(document_id, {
-                "processing_error": f"Indexing failed: {str(exc)}"
+                "processing_error": f"Indexing failed: {str(exc)[:500]}"
             })
-        except:
+        except Exception:
             pass
         
-        raise self.retry(exc=exc, countdown=10)
+        try:
+            raise self.retry(exc=exc, countdown=10)
+        except MaxRetriesExceededError:
+            # Terminal failure: set status to FAILED so UI shows correct state
+            logger.error(
+                f"Document indexing permanently failed for {document_id} "
+                f"after {self.max_retries} retries: {exc}"
+            )
+            try:
+                from core.models.document import DocumentStatus
+                doc_repo.update_document(document_id, {
+                    "processing_status": DocumentStatus.FAILED.value,
+                    "processing_error": f"Permanently failed after {self.max_retries} retries: {str(exc)[:500]}",
+                })
+            except Exception:
+                pass
+            raise
 
 
 @celery_app.task(
@@ -326,7 +383,18 @@ def delete_document_task(
 
     except Exception as exc:
         logger.error(f"Document delete cleanup failed: {exc}")
-        raise self.retry(exc=exc, countdown=10)
+        try:
+            raise self.retry(exc=exc, countdown=10)
+        except MaxRetriesExceededError:
+            # Cleanup failed permanently — orphaned data in Pinecone/MongoDB.
+            # Document record was already deleted so the user isn't blocked,
+            # but vectors/chunks/KG remain and will need manual cleanup.
+            logger.error(
+                f"Document cleanup permanently failed for {document_id} "
+                f"(user {user_id}): orphaned data may remain in Pinecone, "
+                f"chunks, propositions, and knowledge graph."
+            )
+            raise
 
 
 # Export tasks
